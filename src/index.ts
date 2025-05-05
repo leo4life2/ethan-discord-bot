@@ -24,10 +24,10 @@ client.once(Events.ClientReady, (c) =>
 
 client.on(Events.MessageCreate, async (msg) => {
   // Ignore bots
-  if (msg.author.bot) return;
+  if (msg.author.bot || !client.user) return;
 
   // Check if the bot is mentioned or if the message is in the designated channel
-  const isMentioned = msg.mentions.users.has(client.user!.id);
+  const isMentioned = msg.mentions.users.has(client.user.id);
   const isInEthanChannel = msg.channel.id === ETHAN_CHANNEL_ID;
 
   // Only proceed if the message is in a GuildText or DM channel
@@ -38,12 +38,20 @@ client.on(Events.MessageCreate, async (msg) => {
     // Process if mentioned OR in the specific channel
     if (isMentioned || isInEthanChannel) {
       try {
-        const reply = await handle(msg.content, msg);
+        // Fetch last 20 messages for context (excluding the current one initially)
+        const historyCollection = await msg.channel.messages.fetch({ limit: 20 });
+        // Convert collection to array and reverse to get oldest first
+        const history = Array.from(historyCollection.values()).reverse(); 
+
+        const reply = await handle(msg.content, msg, history, client.user.id);
+        
         // Clean up mention if present in reply (optional)
         const finalReply = reply?.replace(/<@!?\d+>/g, '').trim(); 
         if (finalReply) await msg.channel.send(finalReply);
       } catch (err) {
-        console.error("handler error:", err);
+        console.error("Error fetching history or handling message:", err);
+        // Optionally send a simpler error message if fetching history failed
+        await msg.channel.send("Beep boop... Error processing that.").catch(console.error);
       }
     }
   }

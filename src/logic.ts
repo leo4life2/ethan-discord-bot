@@ -24,23 +24,46 @@ function getSystemPrompt(userName: string): string {
     .replace('{userName}', userName);
 }
 
+/** Interface for the formatted message history for OpenAI */
+interface ChatCompletionMessageParam {
+  role: "system" | "user" | "assistant";
+  content: string;
+}
+
 /**
- * Pure, testable business logic.
- * Return a string to send back, or undefined / '' for silence.
+ * Core logic to generate a response using OpenAI, considering message history.
+ * @param latestMessage The latest message content from the user.
+ * @param messageMeta The metadata of the latest message.
+ * @param history An array of the last few messages for context.
+ * @param botId The User ID of this bot.
+ * @returns A string response or undefined.
  */
-export async function handle(text: string, meta: Message): Promise<string | undefined> {
-  const systemPrompt = getSystemPrompt(meta.author.username);
+export async function handle(
+  latestMessage: string,
+  messageMeta: Message,
+  history: Message[],
+  botId: string
+): Promise<string | undefined> {
+  const systemPrompt = getSystemPrompt(messageMeta.author.username);
+
+  // Format the history for OpenAI
+  const messages: ChatCompletionMessageParam[] = [
+    { role: "system", content: systemPrompt },
+    // Map historical messages (oldest first)
+    ...history.map((msg): ChatCompletionMessageParam => ({
+        role: msg.author.id === botId ? "assistant" : "user",
+        content: msg.content,
+    })),
+    // Add the latest message
+    { role: "user", content: latestMessage },
+  ];
 
   try {
     const completion = await openai.chat.completions.create({
-      model: "gpt-4.1-mini", // Or use a different model like gpt-4
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: text },
-      ]
+      model: "gpt-4.1-mini", // Or your desired model
+      messages: messages, // Pass the formatted history + latest message
     });
 
-    // Extract the response text
     const reply = completion.choices[0]?.message?.content?.trim();
     return reply;
 
