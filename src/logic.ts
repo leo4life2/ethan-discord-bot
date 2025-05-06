@@ -27,7 +27,13 @@ function getSystemPrompt(userName: string): string {
 /** Interface for the formatted message history for OpenAI */
 interface ChatCompletionMessageParam {
   role: "system" | "user" | "assistant";
-  content: string;
+  content: string | Array<{
+    type: string;
+    text?: string;
+    image_url?: {
+      url: string;
+    };
+  }>;
 }
 
 /**
@@ -54,14 +60,44 @@ export async function handle(
         role: msg.author.id === botId ? "assistant" : "user",
         content: msg.content,
     })),
-    // Add the latest message
-    { role: "user", content: latestMessage },
   ];
+  
+  // Add the latest message with any images attached
+  if (messageMeta.attachments.size > 0) {
+    const imageAttachments = Array.from(messageMeta.attachments.values())
+      .filter(attachment => attachment.contentType?.startsWith('image/'));
+    
+    if (imageAttachments.length > 0) {
+      // Format message with images
+      const contentArray: Array<{
+        type: string;
+        text?: string;
+        image_url?: {
+          url: string;
+        };
+      }> = [
+        { type: "text", text: latestMessage || "Check out this image!" }
+      ];
+      
+      imageAttachments.forEach(attachment => {
+        contentArray.push({
+          type: "image_url",
+          image_url: { url: attachment.url }
+        });
+      });
+      
+      messages.push({ role: "user", content: contentArray });
+    } else {
+      messages.push({ role: "user", content: latestMessage });
+    }
+  } else {
+    messages.push({ role: "user", content: latestMessage });
+  }
 
   try {
     const completion = await openai.chat.completions.create({
       model: "gpt-4.1-mini", // Or your desired model
-      messages: messages, // Pass the formatted history + latest message
+      messages: messages as any, // Type assertion to bypass type checking temporarily
     });
 
     const reply = completion.choices[0]?.message?.content?.trim();
