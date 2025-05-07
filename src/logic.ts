@@ -58,7 +58,7 @@ export async function handle(
     // Map historical messages (oldest first)
     ...history.map((msg): ChatCompletionMessageParam => ({
         role: msg.author.id === botId ? "assistant" : "user",
-        content: msg.content,
+        content: `[${msg.author.username}]: ${msg.content}`,
     })),
   ];
   
@@ -76,7 +76,7 @@ export async function handle(
           url: string;
         };
       }> = [
-        { type: "text", text: latestMessage || "Check out this image!" }
+        { type: "text", text: latestMessage || "<no message>" }
       ];
       
       imageAttachments.forEach(attachment => {
@@ -88,10 +88,10 @@ export async function handle(
       
       messages.push({ role: "user", content: contentArray });
     } else {
-      messages.push({ role: "user", content: latestMessage });
+      messages.push({ role: "user", content: `[${messageMeta.author.username}]: ${latestMessage}` });
     }
   } else {
-    messages.push({ role: "user", content: latestMessage });
+    messages.push({ role: "user", content: `[${messageMeta.author.username}]: ${latestMessage}` });
   }
 
   try {

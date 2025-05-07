@@ -43,8 +43,6 @@ client.on(Events.MessageCreate, async (msg) => {
         // Convert collection to array and reverse to get oldest first
         const history = Array.from(historyCollection.values()).reverse(); 
 
-        console.log("History", history);
-
         const reply = await handle(msg.content, msg, history, client.user.id);
         
         // Clean up mention if present in reply (optional)
