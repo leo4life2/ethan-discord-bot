@@ -146,7 +146,10 @@ export async function handle(
       try {
         const response: EthanResponse = JSON.parse(responseContent);
         return {
-          text: response.say_in_discord.replace(/^\[Ethan\]:\s*/, '').trim(),
+          text: response.say_in_discord
+            .replace(/^\s*(\[Ethan\]:|Ethan:)\s*/i, '') // Remove [Ethan]: or Ethan: prefix, case-insensitive, with surrounding spaces
+            .replace(/^\s*Voice message:\s*/i, '')      // Remove "Voice message: " prefix, case-insensitive, with surrounding spaces
+            .trim(),
           generateSpeech: response.generate_speech
         };
       } catch (parseError) {
