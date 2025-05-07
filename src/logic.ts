@@ -100,7 +100,7 @@ export async function handle(
       messages: messages as any, // Type assertion to bypass type checking temporarily
     });
 
-    const reply = completion.choices[0]?.message?.content?.trim();
+    const reply = completion.choices[0]?.message?.content?.replace(/^\[Ethan\]:\s*/, '').trim();
     return reply;
 
   } catch (error) {
