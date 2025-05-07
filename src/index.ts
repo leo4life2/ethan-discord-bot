@@ -24,12 +24,24 @@ const client = new Client({
 const rest = new REST({ version: '10' })
   .setToken(TOKEN);
 
-async function sendVoiceMessage(channelId, filePath, seconds) {
+// Define interfaces for better type safety with Discord API responses
+interface AttachmentSlot {
+  id: string;
+  upload_filename: string;
+  upload_url: string;
+}
+
+interface ChannelAttachmentsResponse {
+  attachments: AttachmentSlot[];
+}
+
+async function sendVoiceMessage(channelId: string, filePath: string, seconds: number, audioFileName: string, attachmentTitle: string) {
   const buf = await fs.readFile(filePath);           // opus-encoded OGG
+  // Explicitly type the response from rest.post
   const { attachments: [slot] } = await rest.post(
-    Routes.channelAttachments(channelId),
-    { body: { files: [{ id: '0', filename: 'voice-message.ogg', file_size: buf.length }] } }
-  );
+    `/channels/${channelId}/attachments`, // Use raw path
+    { body: { files: [{ id: '0', filename: audioFileName, file_size: buf.length }] } }
+  ) as ChannelAttachmentsResponse;
 
   await fetch(slot.upload_url, {
     method: 'PUT',
@@ -37,18 +49,19 @@ async function sendVoiceMessage(channelId, filePath, seconds) {
     body: buf,
   });
 
-  const waveform = Buffer.alloc(256, 128).toString('base64');
+  const waveform = Buffer.alloc(256, 128).toString('base64'); // Generate default flat waveform
 
   await rest.post(
-    Routes.channelMessages(channelId),
+    `/channels/${channelId}/messages`, // Use raw path
     { body: {
         flags: 1 << 13,                  // 8192
         attachments: [{
           id: '0',
-          filename: 'voice-message.ogg',
+          filename: audioFileName,
           uploaded_filename: slot.upload_filename,
           duration_secs: seconds,
-          waveform,
+          waveform: waveform, // Use internally generated flat waveform
+          title: `Voice message: ${attachmentTitle}`,   // Keep the title field
         }],
       } }
   );
@@ -89,7 +102,12 @@ client.on(Events.MessageCreate, async (msg) => {
             try {
               const speech = await generateSpeech(finalReply);
               if (speech) {
-                await sendVoiceMessage(msg.channel.id, speech.filePath, speech.duration);
+                // Simplified filename generation
+                const audioFileNameWithExt = `voice_message_${Date.now()}.ogg`;
+
+                // Pass the original finalReply as the attachment title
+                // Waveform is now generated inside sendVoiceMessage
+                await sendVoiceMessage(msg.channel.id, speech.filePath, speech.duration, audioFileNameWithExt, finalReply);
                 // Clean up the file after sending
                 await fs.unlink(speech.filePath).catch(console.error);
               } else {

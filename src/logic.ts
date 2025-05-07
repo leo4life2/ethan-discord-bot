@@ -75,10 +75,31 @@ export async function handle(
   const messages: ChatCompletionMessageParam[] = [
     { role: "system", content: systemPrompt },
     // Map historical messages (oldest first)
-    ...history.map((msg): ChatCompletionMessageParam => ({
+    ...history.map((msg): ChatCompletionMessageParam => {
+      let effectiveContent = msg.content;
+
+      // If original content is empty (null, undefined, or whitespace) and attachments exist
+      if ((effectiveContent === null || effectiveContent === undefined || effectiveContent.trim() === '') && msg.attachments.size > 0) {
+        const attachmentsArray = Array.from(msg.attachments.values());
+        // Find the first attachment that has a non-empty string title
+        const firstAttachmentWithTitle = attachmentsArray.find(
+          att => (att as any).title && typeof (att as any).title === 'string' && (att as any).title.trim() !== ''
+        );
+
+        if (firstAttachmentWithTitle) {
+          effectiveContent = (firstAttachmentWithTitle as any).title;
+        }
+        // If no suitable title is found, effectiveContent remains the original empty/whitespace value
+      }
+
+      // Ensure the final content is a string, defaulting to an empty string if null/undefined
+      const finalContentString = (effectiveContent === null || effectiveContent === undefined) ? "" : effectiveContent;
+
+      return {
         role: msg.author.id === botId ? "assistant" : "user",
-        content: `[${msg.author.username}]: ${msg.content}`,
-    })),
+        content: `[${msg.author.username}]: ${finalContentString}`,
+      };
+    }),
   ];
   
   // Add the latest message with any images attached
@@ -172,6 +193,10 @@ export async function generateSpeech(text: string): Promise<{ filePath: string; 
     const fileName = `voice_${now}.ogg`;
     const filePath = path.resolve(process.cwd(), 'temp_audio', fileName);
     const buffer = Buffer.from(await speech.arrayBuffer());
+
+    // Ensure the directory exists
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+
     await fs.writeFile(filePath, buffer);
     
     const estimatedDuration = Math.max(1, Math.min(60, Math.ceil(text.length / 100)));
