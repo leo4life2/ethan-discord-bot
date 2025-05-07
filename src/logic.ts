@@ -16,6 +16,15 @@ You are NOT a support bot. If anyone asks usage related questions, tell them to 
 Your developer is leo4life.
 Current date: {currentDate}
 User's Discord name: {userName}
+
+IMPORTANT: You must respond with a JSON object that has the following structure:
+{
+  "say_in_discord": "your message here",
+  "generate_speech": false
+}
+
+The "say_in_discord" field should contain the text you want to say in Discord.
+The "generate_speech" field should usually be false. Only set it to true when you think a voice message would be more appropriate than text (use sparingly, at most once every 10 seconds).
 `;
 
 /**
@@ -108,43 +117,24 @@ export async function handle(
     const completion = await openai.chat.completions.create({
       model: "gpt-4.1-mini", // Or your desired model
       messages: messages as any, // Type assertion to bypass type checking temporarily
-      response_format: { type: "json_object" },
-      tools: [
-        {
-          type: "function",
-          function: {
-            name: "generate_response",
-            description: "Generate a response for Ethan to say in Discord",
-            parameters: {
-              type: "object",
-              properties: {
-                say_in_discord: {
-                  type: "string",
-                  description: "The text that Ethan will say in Discord"
-                },
-                generate_speech: {
-                  type: "boolean",
-                  description: "Whether to generate speech for this response. Usually false, but can be true when you think a voice message would be more appropriate. Use sparingly."
-                }
-              },
-              required: ["say_in_discord", "generate_speech"]
-            }
-          }
-        }
-      ],
-      tool_choice: {
-        type: "function",
-        function: { name: "generate_response" }
-      }
+      response_format: { type: "json_object" }
     });
 
-    const toolCall = completion.choices[0]?.message?.tool_calls?.[0];
-    if (toolCall?.type === 'function' && toolCall.function.name === 'generate_response') {
-      const response: EthanResponse = JSON.parse(toolCall.function.arguments);
-      return {
-        text: response.say_in_discord.replace(/^\[Ethan\]:\s*/, '').trim(),
-        generateSpeech: response.generate_speech
-      };
+    const responseContent = completion.choices[0]?.message?.content;
+    if (responseContent) {
+      try {
+        const response: EthanResponse = JSON.parse(responseContent);
+        return {
+          text: response.say_in_discord.replace(/^\[Ethan\]:\s*/, '').trim(),
+          generateSpeech: response.generate_speech
+        };
+      } catch (parseError) {
+        console.error("Error parsing JSON response:", parseError);
+        return {
+          text: "Oops, my brain short circuited. Say again?",
+          generateSpeech: false
+        };
+      }
     }
 
     return undefined;
