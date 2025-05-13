@@ -78,18 +78,32 @@ export async function handle(
     ...history.map((msg): ChatCompletionMessageParam => {
       let effectiveContent = msg.content;
 
-      // If original content is empty (null, undefined, or whitespace) and attachments exist
-      if ((effectiveContent === null || effectiveContent === undefined || effectiveContent.trim() === '') && msg.attachments.size > 0) {
-        const attachmentsArray = Array.from(msg.attachments.values());
-        // Find the first attachment that has a non-empty string title
-        const firstAttachmentWithTitle = attachmentsArray.find(
-          att => (att as any).title && typeof (att as any).title === 'string' && (att as any).title.trim() !== ''
-        );
+      // If original content is empty (null, undefined, or whitespace)
+      if (effectiveContent === null || effectiveContent === undefined || effectiveContent.trim() === '') {
+        if (msg.attachments.size > 0) {
+          const attachmentsArray = Array.from(msg.attachments.values());
+          // Find the first attachment that has a non-empty string title
+          const firstAttachmentWithTitle = attachmentsArray.find(
+            att => (att as any).title && typeof (att as any).title === 'string' && (att as any).title.trim() !== ''
+          );
 
-        if (firstAttachmentWithTitle) {
-          effectiveContent = (firstAttachmentWithTitle as any).title;
+          if (firstAttachmentWithTitle) {
+            effectiveContent = (firstAttachmentWithTitle as any).title;
+          }
         }
-        // If no suitable title is found, effectiveContent remains the original empty/whitespace value
+        
+        if ((effectiveContent === null || effectiveContent === undefined || effectiveContent.trim() === '') && msg.embeds && msg.embeds.length > 0) {
+          const embed = msg.embeds[0];
+          if (embed.description) {
+            effectiveContent = embed.description;
+          } else if (embed.title) {
+            effectiveContent = embed.title;
+          }
+        }
+        
+        if ((effectiveContent === null || effectiveContent === undefined || effectiveContent.trim() === '') && msg.reference) {
+          effectiveContent = "[Referenced message]";
+        }
       }
 
       // Ensure the final content is a string, defaulting to an empty string if null/undefined
