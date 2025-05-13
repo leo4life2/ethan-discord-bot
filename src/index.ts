@@ -129,7 +129,6 @@ client.on(Events.MessageCreate, async (msg) => {
     }
   }
 });
-// I KNOW THAT THIS WILL SLOW DOWN THE STARTUP SEQUENCE A BIT but we want it to look fancy :sparkles:
 await client.login(token).then((token) => {
  client.user.setPresence({
   game: { name: 'playing with u' },
