@@ -150,6 +150,7 @@ client.once('ready', () => {
   setInterval(() => {
     if (!client.user) return; // Guard clause for client.user
     const status = getRandomStatus();
+    console.log("setting status to", status);
     client.user.setPresence({
       activities: [status],
       status: 'online',
