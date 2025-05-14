@@ -75,45 +75,52 @@ export async function handle(
   const messages: ChatCompletionMessageParam[] = [
     { role: "system", content: systemPrompt },
     // Map historical messages (oldest first)
-    ...history.map((msg): ChatCompletionMessageParam => {
-      let effectiveContent = msg.content;
+    ...(await Promise.all(history.map(async (msg): Promise<ChatCompletionMessageParam> => {
+      let effectiveContent = msg.content?.trim() || '';
 
-      // If original content is empty (null, undefined, or whitespace)
-      if (effectiveContent === null || effectiveContent === undefined || effectiveContent.trim() === '') {
-        if (msg.attachments.size > 0) {
-          const attachmentsArray = Array.from(msg.attachments.values());
-          // Find the first attachment that has a non-empty string title
-          const firstAttachmentWithTitle = attachmentsArray.find(
-            att => (att as any).title && typeof (att as any).title === 'string' && (att as any).title.trim() !== ''
-          );
-
-          if (firstAttachmentWithTitle) {
-            effectiveContent = (firstAttachmentWithTitle as any).title;
-          }
+      if (!effectiveContent && msg.attachments.size > 0) {
+        const attachmentWithTitle = Array.from(msg.attachments.values()).find(
+          att => (att as any).title && typeof (att as any).title === 'string' && (att as any).title.trim() !== ''
+        );
+        if (attachmentWithTitle) {
+          effectiveContent = ((attachmentWithTitle as any).title as string).trim();
         }
-        
-        if ((effectiveContent === null || effectiveContent === undefined || effectiveContent.trim() === '') && msg.embeds && msg.embeds.length > 0) {
-          const embed = msg.embeds[0];
-          if (embed.description) {
-            effectiveContent = embed.description;
-          } else if (embed.title) {
-            effectiveContent = embed.title;
+      }
+      
+      if (!effectiveContent && msg.embeds && msg.embeds.length > 0) {
+        const embed = msg.embeds[0];
+        effectiveContent = embed.description?.trim() || embed.title?.trim() || '';
+      }
+      
+      if (!effectiveContent && msg.reference && msg.reference.messageId && msg.reference.channelId) {
+        try {
+          const channel = await msg.client.channels.fetch(msg.reference.channelId);
+          if (channel && channel.isTextBased()) { // Check if channel is text-based and found
+            const referencedMessage = await channel.messages.fetch(msg.reference.messageId);
+            if (referencedMessage) {
+              const refMsgContent = referencedMessage.content?.trim();
+              if (refMsgContent) {
+                effectiveContent = `[Replying to ${referencedMessage.author.username}: ${refMsgContent}]`;
+              } else {
+                effectiveContent = `[Replying to ${referencedMessage.author.username}: (message has no text)]`;
+              }
+            } else {
+              effectiveContent = "[Original message not found in channel]";
+            }
+          } else {
+            effectiveContent = "[Original message's channel not found or not text-based]";
           }
-        }
-        
-        if ((effectiveContent === null || effectiveContent === undefined || effectiveContent.trim() === '') && msg.reference) {
-          effectiveContent = "[Referenced message]";
+        } catch (fetchError) {
+          console.error(`Failed to fetch referenced message ${msg.reference.messageId} from channel ${msg.reference.channelId}:`, fetchError);
+          effectiveContent = "[Error loading reply context]";
         }
       }
 
-      // Ensure the final content is a string, defaulting to an empty string if null/undefined
-      const finalContentString = (effectiveContent === null || effectiveContent === undefined) ? "" : effectiveContent;
-
       return {
         role: msg.author.id === botId ? "assistant" : "user",
-        content: `[${msg.author.username}]: ${finalContentString}`,
+        content: `[${msg.author.username}]: ${effectiveContent}`, // Use effectiveContent directly
       };
-    }),
+    }))),
   ];
   
   // Add the latest message with any images attached
@@ -156,27 +163,30 @@ export async function handle(
     });
 
     const responseContent = completion.choices[0]?.message?.content;
-    if (responseContent) {
-      try {
-        const response: EthanResponse = JSON.parse(responseContent);
-        return {
-          text: response.say_in_discord
-            .replace(/^\s*(\[Ethan\]:|Ethan:)\s*/i, '') // Remove [Ethan]: or Ethan: prefix, case-insensitive, with surrounding spaces
-            .replace(/^\s*Voice message:\s*/i, '')      // Remove "Voice message: " prefix, case-insensitive, with surrounding spaces
-            .trim(),
-          generateSpeech: response.generate_speech
-        };
-      } catch (parseError) {
-        console.error("Error parsing JSON response:", parseError);
-        return {
-          text: "Oops, my brain short circuited. Say again?",
-          generateSpeech: false
-        };
-      }
+    if (!responseContent) {
+      console.warn("OpenAI response content was empty.");
+      return { 
+        text: "My brain's a bit fuzzy, what was that?", 
+        generateSpeech: false 
+      };
     }
-
-    return undefined;
-
+    
+    try {
+      const response: EthanResponse = JSON.parse(responseContent);
+      return {
+        text: response.say_in_discord
+          .replace(/^\s*(\\[Ethan\\]:|Ethan:)\\s*/i, '') // Remove [Ethan]: or Ethan: prefix
+          .replace(/^\s*Voice message:\\s*/i, '')      // Remove "Voice message: " prefix
+          .trim(),
+        generateSpeech: response.generate_speech
+      };
+    } catch (parseError) {
+      console.error("Error parsing JSON response:", parseError);
+      return {
+        text: "Oops, my brain short circuited. Say again?",
+        generateSpeech: false
+      };
+    }
   } catch (error) {
     console.error("OpenAI API error:", error);
     return { 
