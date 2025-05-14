@@ -80,5 +80,5 @@ export function startPresenceRotation(client: Client) {
       status: PresenceUpdateStatus.Online,
       activities: [activity],
     })
-  }, 20000); // 20-second updates, rate-limit safe
+  }, 1000 * 60 * 10);
 } 
