@@ -129,5 +129,9 @@ client.on(Events.MessageCreate, async (msg) => {
     }
   }
 });
-
-await client.login(TOKEN);
+await client.login(token).then((token) => {
+ client.user.setPresence({
+  game: { name: 'playing with u' },
+  status: 'online',
+ });
+});
