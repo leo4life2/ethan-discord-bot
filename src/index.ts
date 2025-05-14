@@ -4,6 +4,7 @@ import {
   GatewayIntentBits,
   Events,
   ChannelType,
+  ActivityType,
 } from "discord.js";
 import { handle, generateSpeech } from "./logic.js";
 import { REST, Routes } from 'discord.js';
@@ -46,7 +47,7 @@ async function sendVoiceMessage(channelId: string, filePath: string, seconds: nu
   await fetch(slot.upload_url, {
     method: 'PUT',
     headers: { 'Content-Type': 'audio/ogg' },
-    body: buf,
+    body: buf as Buffer, // Ensured buf is treated as Node.js Buffer, which is a Uint8Array
   });
 
   const waveform = Buffer.alloc(256, 128).toString('base64'); // Generate default flat waveform
@@ -129,9 +130,32 @@ client.on(Events.MessageCreate, async (msg) => {
     }
   }
 });
-await client.login(token).then((token) => {
- client.user.setPresence({
-  game: { name: 'playing with u' },
-  status: 'online',
- });
+
+// New presence logic
+const getRandomStatus = () => [
+  { name: 'Mining diamonds ⛏️💎', type: ActivityType.Playing },
+  { name: 'Training creepers 🧨🤝', type: ActivityType.Playing },
+  { name: `helping ${client.users.cache.size} miners`, type: ActivityType.Watching },
+  { name: 'Brewing friendship potions 🧪💕', type: ActivityType.Competing },
+  { name: `${client.ws.ping}ms ping—better than creepers!`, type: ActivityType.Playing },
+  { name: `in ${client.guilds.cache.size} worlds 🌍`, type: ActivityType.Playing },
+  { name: 'Avoiding Endermen 👀', type: ActivityType.Watching },
+  { name: 'Herobrine sightings 👻', type: ActivityType.Listening },
+][Math.floor(Math.random() * 8)];
+
+client.once('ready', () => {
+  if (!client.user) return; // Guard clause for client.user
+  console.log(`Ethan is online as ${client.user.tag}!`);
+
+  setInterval(() => {
+    if (!client.user) return; // Guard clause for client.user
+    const status = getRandomStatus();
+    client.user.setPresence({
+      activities: [status],
+      status: 'online',
+    });
+  }, 15000); // update every 15 seconds
 });
+
+// Login to Discord with your client token
+client.login(TOKEN);
