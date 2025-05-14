@@ -8,7 +8,6 @@ import {
 import { handle, generateSpeech } from "./logic.js";
 import { REST } from 'discord.js';
 import fs from 'node:fs/promises';
-import path from 'node:path';
 import { startPresenceRotation } from './presence.js';
 
 const TOKEN = process.env.DISCORD_TOKEN!;
