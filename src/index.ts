@@ -4,12 +4,12 @@ import {
   GatewayIntentBits,
   Events,
   ChannelType,
-  ActivityType,
 } from "discord.js";
 import { handle, generateSpeech } from "./logic.js";
-import { REST, Routes } from 'discord.js';
+import { REST } from 'discord.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { startPresenceRotation } from './presence.js';
 
 const TOKEN = process.env.DISCORD_TOKEN!;
 const ETHAN_CHANNEL_ID = "1266202723448000650"; // talk-to-ethan
@@ -37,17 +37,16 @@ interface ChannelAttachmentsResponse {
 }
 
 async function sendVoiceMessage(channelId: string, filePath: string, seconds: number, audioFileName: string, attachmentTitle: string) {
-  const buf = await fs.readFile(filePath);           // opus-encoded OGG
-  // Explicitly type the response from rest.post
+  const buf = await fs.readFile(filePath); // buf is a Node.js Buffer
   const { attachments: [slot] } = await rest.post(
-    `/channels/${channelId}/attachments`, // Use raw path
+    `/channels/${channelId}/attachments`,
     { body: { files: [{ id: '0', filename: audioFileName, file_size: buf.length }] } }
   ) as ChannelAttachmentsResponse;
 
   await fetch(slot.upload_url, {
     method: 'PUT',
     headers: { 'Content-Type': 'audio/ogg' },
-    body: buf as Buffer, // Ensured buf is treated as Node.js Buffer, which is a Uint8Array
+    body: buf,
   });
 
   const waveform = Buffer.alloc(256, 128).toString('base64'); // Generate default flat waveform
@@ -68,9 +67,12 @@ async function sendVoiceMessage(channelId: string, filePath: string, seconds: nu
   );
 }
 
-client.once(Events.ClientReady, (c) =>
-  console.log(`✨ Logged in as ${c.user.tag}`)
-);
+client.once(Events.ClientReady, (readyClient) => {
+  console.log(`✨ Logged in as ${readyClient.user.tag}`);
+  if (readyClient.user) { // Ensure client.user is available
+    startPresenceRotation(readyClient); // Start new presence rotation
+  }
+});
 
 client.on(Events.MessageCreate, async (msg) => {
   // Ignore bots
@@ -116,7 +118,8 @@ client.on(Events.MessageCreate, async (msg) => {
               }
             } catch (err) {
               console.error("Error generating or sending speech:", err);
-              throw err;
+              // No throw err; here to allow bot to respond with text if speech fails
+              await msg.channel.send(finalReply); // Send text if speech fails
             }
           } else {
             await msg.channel.send(finalReply);
@@ -131,32 +134,5 @@ client.on(Events.MessageCreate, async (msg) => {
   }
 });
 
-// New presence logic
-const getRandomStatus = () => [
-  { name: 'Mining diamonds ⛏️💎', type: ActivityType.Playing },
-  { name: 'Training creepers 🧨🤝', type: ActivityType.Playing },
-  { name: `helping ${client.users.cache.size} miners`, type: ActivityType.Watching },
-  { name: 'Brewing friendship potions 🧪💕', type: ActivityType.Competing },
-  { name: `${client.ws.ping}ms ping—better than creepers!`, type: ActivityType.Playing },
-  { name: `in ${client.guilds.cache.size} worlds 🌍`, type: ActivityType.Playing },
-  { name: 'Avoiding Endermen 👀', type: ActivityType.Watching },
-  { name: 'Herobrine sightings 👻', type: ActivityType.Listening },
-][Math.floor(Math.random() * 8)];
-
-client.once('ready', () => {
-  if (!client.user) return; // Guard clause for client.user
-  console.log(`Ethan is online as ${client.user.tag}!`);
-
-  setInterval(() => {
-    if (!client.user) return; // Guard clause for client.user
-    const status = getRandomStatus();
-    console.log("setting status to", status);
-    client.user.setPresence({
-      activities: [status],
-      status: 'online',
-    });
-  }, 15000); // update every 15 seconds
-});
-
-// Login to Discord with your client token
-client.login(TOKEN);
+// Removed old presence logic and login
+client.login(TOKEN); // Login is now the last step
