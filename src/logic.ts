@@ -70,8 +70,12 @@ export async function handle(
   history: Message[],
   botId: string
 ): Promise<{ text: string; generateSpeech: boolean } | undefined> {
+  // Message commenting: make bot ignore messages starting with //
+  if (latestMessage.trim().startsWith('//')) {
+    return undefined; // Return undefined to indicate no response should be sent
+  }
   const systemPrompt = getSystemPrompt(messageMeta.author.username);
-
+}
   // Format the history for OpenAI
   const messages: ChatCompletionMessageParam[] = [
     { role: "system", content: systemPrompt },
