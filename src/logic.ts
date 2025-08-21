@@ -71,15 +71,15 @@ export async function handle(
   botId: string
 ): Promise<{ text: string; generateSpeech: boolean } | undefined> {
   const systemPrompt = getSystemPrompt(messageMeta.author.username);
-  // Narrow channel type to text-based early to satisfy TypeScript in stricter envs
-  const channel = messageMeta.channel;
-  if (!channel || !channel.isTextBased()) {
+  // Narrow channel to one that supports send(); avoid version-specific typings
+  const channel = messageMeta.channel as any;
+  if (!channel || typeof channel.send !== 'function') {
     return {
       text: "i can only reply in text channels, sorry!",
       generateSpeech: false,
     };
   }
-  const textChannel = channel; // Now typed as TextBasedChannel
+  const textChannel: any = channel;
 
   // Build Responses API input array
   const inputItems: Array<{
