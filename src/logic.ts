@@ -174,7 +174,7 @@ export async function handle(
     imageAttachments.forEach((attachment) => {
       latestContentParts.push({
         type: 'input_image',
-        image_url: { url: attachment.url },
+        image_url: attachment.url,
       });
     });
   }
