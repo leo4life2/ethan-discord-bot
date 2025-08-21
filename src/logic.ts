@@ -228,14 +228,29 @@ export async function handle(
         const role = msg.author.id === botId ? 'assistant' : 'user';
         const partType = role === 'assistant' ? 'output_text' : 'input_text';
 
+        const contentParts: any[] = [
+          {
+            type: partType,
+            text: `[${msg.author.username}]: ${effectiveContent}`,
+          },
+        ];
+
+        // Include image attachments from historical user messages
+        if (role === 'user' && msg.attachments.size > 0) {
+          const imageAttachments = Array.from(msg.attachments.values()).filter(
+            (attachment) => attachment.contentType?.startsWith('image/')
+          );
+          imageAttachments.forEach((attachment) => {
+            contentParts.push({
+              type: 'input_image',
+              image_url: attachment.url,
+            });
+          });
+        }
+
         return {
           role,
-          content: [
-            {
-              type: partType,
-              text: `[${msg.author.username}]: ${effectiveContent}`,
-            },
-          ],
+          content: contentParts,
         };
       })
     ))
