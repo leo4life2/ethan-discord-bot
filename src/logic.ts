@@ -18,14 +18,14 @@ Your developer is leo4life.
 Current date: {currentDate}
 User's Discord name: {userName}
 
-IMPORTANT: You must respond with a JSON object that has the following structure:
+IMPORTANT: You must respond with a JSON object that has the following structure, and nothing else:
 {
   "say_in_discord": "your message here",
   "generate_speech": false
 }
 
 The "say_in_discord" field should contain the text you want to say in Discord.
-The "generate_speech" field should usually be false. Only set it to true when you think a voice message would be more appropriate than text (use sparingly, at most once every 10 seconds).
+The "generate_speech" field should usually be false. Only set it to true when you think a voice message would be more appropriate than text (use sparingly).
 `;
 
 /**
@@ -38,17 +38,7 @@ function getSystemPrompt(userName: string): string {
     .replace('{userName}', userName);
 }
 
-/** Interface for the formatted message history for OpenAI */
-interface ChatCompletionMessageParam {
-  role: "system" | "user" | "assistant";
-  content: string | Array<{
-    type: string;
-    text?: string;
-    image_url?: {
-      url: string;
-    };
-  }>;
-}
+// Using Responses API; message parts will be constructed inline as needed
 
 /** Interface for the structured output from OpenAI */
 interface EthanResponse {
@@ -72,127 +62,330 @@ export async function handle(
 ): Promise<{ text: string; generateSpeech: boolean } | undefined> {
   const systemPrompt = getSystemPrompt(messageMeta.author.username);
 
-  // Format the history for OpenAI
-  const messages: ChatCompletionMessageParam[] = [
-    { role: "system", content: systemPrompt },
-    // Map historical messages (oldest first)
-    ...(await Promise.all(history.map(async (msg): Promise<ChatCompletionMessageParam> => {
-      let effectiveContent = msg.content?.trim() || '';
+  // Build Responses API input array
+  const inputItems: Array<{
+    role: string;
+    content: Array<any>;
+  }> = [];
 
-      if (!effectiveContent && msg.attachments.size > 0) {
-        const attachmentWithTitle = Array.from(msg.attachments.values()).find(
-          att => (att as any).title && typeof (att as any).title === 'string' && (att as any).title.trim() !== ''
-        );
-        if (attachmentWithTitle) {
-          effectiveContent = ((attachmentWithTitle as any).title as string).trim();
+  // Developer/system instructions as developer role
+  inputItems.push({
+    role: "developer",
+    content: [
+      {
+        type: "input_text",
+        text: systemPrompt,
+      },
+    ],
+  });
+
+  // Map historical messages (oldest first)
+  inputItems.push(
+    ...(await Promise.all(
+      history.map(async (msg) => {
+        let effectiveContent = msg.content?.trim() || '';
+
+        if (!effectiveContent && msg.attachments.size > 0) {
+          const attachmentWithTitle = Array.from(msg.attachments.values()).find(
+            (att) => (att as any).title && typeof (att as any).title === 'string' && (att as any).title.trim() !== ''
+          );
+          if (attachmentWithTitle) {
+            effectiveContent = ((attachmentWithTitle as any).title as string).trim();
+          }
         }
-      }
-      
-      if (!effectiveContent && msg.embeds && msg.embeds.length > 0) {
-        const embed = msg.embeds[0];
-        effectiveContent = embed.description?.trim() || embed.title?.trim() || '';
-      }
-      
-      if (!effectiveContent && msg.reference && msg.reference.messageId && msg.reference.channelId) {
-        try {
-          const channel = await msg.client.channels.fetch(msg.reference.channelId);
-          if (channel && channel.isTextBased()) { // Check if channel is text-based and found
-            const referencedMessage = await channel.messages.fetch(msg.reference.messageId);
-            if (referencedMessage) {
-              const refMsgContent = referencedMessage.content?.trim();
-              if (refMsgContent) {
-                effectiveContent = `[Replying to ${referencedMessage.author.username}: ${refMsgContent}]`;
+
+        if (!effectiveContent && msg.embeds && msg.embeds.length > 0) {
+          const embed = msg.embeds[0];
+          effectiveContent = embed.description?.trim() || embed.title?.trim() || '';
+        }
+
+        if (!effectiveContent && msg.reference && msg.reference.messageId && msg.reference.channelId) {
+          try {
+            const channel = await msg.client.channels.fetch(msg.reference.channelId);
+            if (channel && channel.isTextBased()) {
+              const referencedMessage = await channel.messages.fetch(msg.reference.messageId);
+              if (referencedMessage) {
+                const refMsgContent = referencedMessage.content?.trim();
+                if (refMsgContent) {
+                  effectiveContent = `[Replying to ${referencedMessage.author.username}: ${refMsgContent}]`;
+                } else {
+                  effectiveContent = `[Replying to ${referencedMessage.author.username}: (message has no text)]`;
+                }
               } else {
-                effectiveContent = `[Replying to ${referencedMessage.author.username}: (message has no text)]`;
+                effectiveContent = "[Original message not found in channel]";
               }
             } else {
-              effectiveContent = "[Original message not found in channel]";
+              effectiveContent = "[Original message's channel not found or not text-based]";
             }
-          } else {
-            effectiveContent = "[Original message's channel not found or not text-based]";
+          } catch (fetchError) {
+            console.error(
+              `Failed to fetch referenced message ${msg.reference.messageId} from channel ${msg.reference.channelId}:`,
+              fetchError
+            );
+            effectiveContent = "[Error loading reply context]";
           }
-        } catch (fetchError) {
-          console.error(`Failed to fetch referenced message ${msg.reference.messageId} from channel ${msg.reference.channelId}:`, fetchError);
-          effectiveContent = "[Error loading reply context]";
         }
-      }
 
-      return {
-        role: msg.author.id === botId ? "assistant" : "user",
-        content: `[${msg.author.username}]: ${effectiveContent}`, // Use effectiveContent directly
-      };
-    }))),
-  ];
-  
-  // Add the latest message with any images attached
-  if (messageMeta.attachments.size > 0) {
-    const imageAttachments = Array.from(messageMeta.attachments.values())
-      .filter(attachment => attachment.contentType?.startsWith('image/'));
-    
-    if (imageAttachments.length > 0) {
-      // Format message with images
-      const contentArray: Array<{
-        type: string;
-        text?: string;
-        image_url?: {
-          url: string;
+        const role = msg.author.id === botId ? 'assistant' : 'user';
+        const partType = role === 'assistant' ? 'output_text' : 'input_text';
+
+        return {
+          role,
+          content: [
+            {
+              type: partType,
+              text: `[${msg.author.username}]: ${effectiveContent}`,
+            },
+          ],
         };
-      }> = [
-        { type: "text", text: latestMessage || "<no message>" }
-      ];
-      
-      imageAttachments.forEach(attachment => {
-        contentArray.push({
-          type: "image_url",
-          image_url: { url: attachment.url }
-        });
+      })
+    ))
+  );
+
+  // Add the latest message with any images attached
+  const latestContentParts: Array<any> = [
+    { type: 'input_text', text: `[${messageMeta.author.username}]: ${latestMessage || '<no message>'}` },
+  ];
+
+  if (messageMeta.attachments.size > 0) {
+    const imageAttachments = Array.from(messageMeta.attachments.values()).filter(
+      (attachment) => attachment.contentType?.startsWith('image/')
+    );
+
+    imageAttachments.forEach((attachment) => {
+      latestContentParts.push({
+        type: 'input_image',
+        image_url: { url: attachment.url },
       });
-      
-      messages.push({ role: "user", content: contentArray });
-    } else {
-      messages.push({ role: "user", content: `[${messageMeta.author.username}]: ${latestMessage}` });
-    }
-  } else {
-    messages.push({ role: "user", content: `[${messageMeta.author.username}]: ${latestMessage}` });
+    });
   }
 
+  inputItems.push({ role: 'user', content: latestContentParts });
+
   try {
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4.1-mini", // Or your desired model
-      messages: messages as any, // Type assertion to bypass type checking temporarily
-      response_format: { type: "json_object" }
+    // Streaming: progressively update a message in Discord based on events
+    let progressMessage: any | null = null;
+    let progressMessagePromise: Promise<any> | null = null;
+    let attemptedProgressSend = false;
+    let sentAnyProgress = false;
+    let hasCompleted = false;
+    let nextAllowedEditAt = 0;
+    const editCooldownMs = 1200;
+    let currentProgressText = '';
+
+    const ensureProgressMessage = async (initialText: string) => {
+      if (hasCompleted) return;
+      if (progressMessage) return;
+      if (progressMessagePromise) {
+        try { await progressMessagePromise; } catch { /* ignore */ }
+        return;
+      }
+
+      attemptedProgressSend = true; // set BEFORE awaiting to avoid concurrent sends
+      progressMessagePromise = (async () => {
+        try {
+          const sent = await messageMeta.channel.send(initialText);
+          progressMessage = sent;
+          currentProgressText = initialText;
+          sentAnyProgress = true;
+        } catch (e) {
+          console.error('Failed to send progress message:', e);
+        } finally {
+          progressMessagePromise = null;
+        }
+      })();
+      try { await progressMessagePromise; } catch { /* ignore */ }
+    };
+
+    const safeEdit = async (text: string) => {
+      if (hasCompleted) return;
+      if (text === currentProgressText) return; // Skip if no visible change
+      const now = Date.now();
+      if (now < nextAllowedEditAt) return;
+      nextAllowedEditAt = now + editCooldownMs;
+      if (!progressMessage) {
+        if (progressMessagePromise) {
+          try { await progressMessagePromise; } catch { /* ignore */ }
+        }
+        if (!progressMessage) return;
+      }
+      try {
+        await progressMessage.edit(text);
+        currentProgressText = text;
+      } catch (e) {
+        console.error('Failed to edit progress message:', e);
+      }
+    };
+
+    const stream = await openai.responses.stream({
+      model: 'gpt-5-mini',
+      input: inputItems as any,
+      text: {
+        format: { type: 'text' },
+        verbosity: 'medium',
+      },
+      reasoning: {
+        effort: 'low',
+        summary: 'auto',
+      },
+      tools: [
+        {
+          type: 'web_search',
+          user_location: { type: 'approximate', country: 'US' },
+          search_context_size: 'low',
+        } as any,
+      ],
+      store: true,
     });
 
-    const responseContent = completion.choices[0]?.message?.content;
-    if (!responseContent) {
-      console.warn("OpenAI response content was empty.");
-      return { 
-        text: "My brain's a bit fuzzy, what was that?", 
-        generateSpeech: false 
-      };
-    }
-    
-    try {
-      const response: EthanResponse = JSON.parse(responseContent);
-      return {
-        text: response.say_in_discord
-          .replace(/^\s*(\\[Ethan\\]:|Ethan:)\\s*/i, '') // Remove [Ethan]: or Ethan: prefix
-          .replace(/^\s*Voice message:\\s*/i, '')      // Remove "Voice message: " prefix
-          .trim(),
-        generateSpeech: response.generate_speech
-      };
-    } catch (parseError) {
-      console.error("Error parsing JSON response:", parseError);
-      return {
-        text: "Oops, my brain short circuited. Say again?",
-        generateSpeech: false
-      };
-    }
+    return await new Promise((resolve) => {
+      stream.on('event', async (event: any) => {
+        try {
+          const type = event?.type;
+          // Ignore any late events after completion
+          if (hasCompleted) return;
+          if (type === 'response.web_search_call.in_progress') {
+            await ensureProgressMessage('searching the web...');
+            await safeEdit('searching the web...');
+            return;
+          }
+          if (type === 'response.reasoning_summary_text.delta') {
+            await ensureProgressMessage('thinking...');
+            await safeEdit('thinking...');
+            return;
+          }
+          if (type === 'response.completed') {
+            const finalResponse = event?.response ?? event;
+            hasCompleted = true;
+            // Debug: print entire final response payload
+            try {
+              console.log('DEBUG finalResponse:', JSON.stringify(finalResponse, null, 2));
+            } catch {}
+            let rawText: string | undefined = typeof finalResponse?.output_text === 'string' ? finalResponse.output_text : undefined;
+            let structured: EthanResponse | null = null;
+            const urlCitations: Array<{ title: string; url: string; start: number; end: number }> = [];
+
+            // Inspect outputs for JSON parsed content or text
+            const outputs: any[] = Array.isArray(finalResponse?.output) ? finalResponse.output : [];
+            for (const outputItem of outputs) {
+              const parts: any[] = Array.isArray(outputItem?.content) ? outputItem.content : [];
+              for (const part of parts) {
+                const partType = part?.type;
+                if (partType === 'output_text' && typeof part?.text === 'string') {
+                  // Collect URL citations from annotations and replace in-place
+                  const anns: any[] = Array.isArray(part?.annotations) ? part.annotations : [];
+                  const urlAnns = anns.filter((a) => a?.type === 'url_citation' && typeof a?.url === 'string');
+                  if (anns.length > 0) {
+                    try {
+                      console.log('DEBUG output_text part with annotations:', JSON.stringify(part, null, 2));
+                    } catch {}
+                  }
+                  urlAnns.forEach((ann) => {
+                    urlCitations.push({
+                      title: ann.title,
+                      url: ann.url,
+                      start: ann.start_index,
+                      end: ann.end_index,
+                    });
+                  });
+
+                  let replaced = part.text as string;
+                  // Do not inline replace by indices (could shift positions across parts). Instead, save to urlCitations and handle cite tokens after.
+
+                  rawText = (rawText || '') + replaced;
+                } else if ((partType === 'json' || partType === 'tool_result') && part?.parsed) {
+                  try {
+                    structured = part.parsed as EthanResponse;
+                  } catch {
+                    // ignore
+                  }
+                } else if (partType === 'refusal' && typeof part?.refusal === 'string') {
+                  rawText = (rawText || '') + part.refusal;
+                }
+              }
+            }
+
+            if (!structured && rawText && typeof rawText === 'string') {
+              try {
+                structured = JSON.parse(rawText);
+              } catch {
+                // not JSON, proceed with raw text
+              }
+            }
+
+            // Debug: print collected URL citations array
+            try {
+              // eslint-disable-next-line no-console
+              console.log(JSON.stringify(urlCitations, null, 2));
+            } catch {}
+
+            if (!structured && (!rawText || typeof rawText !== 'string' || rawText.trim() === '')) {
+              console.warn('OpenAI response content was empty.');
+              const fallback = "My brain's a bit fuzzy, what was that?";
+              if (!sentAnyProgress) {
+                await messageMeta.channel.send(fallback);
+              } else if (progressMessage) {
+                await safeEdit(fallback);
+              }
+              resolve(undefined);
+              return;
+            }
+
+            let finalText = (structured?.say_in_discord ?? rawText ?? '')
+              .replace(/^\s*(\\[Ethan\\]:|Ethan:)\s*/i, '')
+              .replace(/^\s*Voice message:\s*/i, '')
+              .trim();
+
+            // Replace any cite tokens like "citeturn0forecast0" with URL(s)
+            // Match ligature-like private-use tokens we observed: "cite..."
+            // Build regex by embedding the specific chars directly to avoid escaping issues
+            const citeTokenRegex = /cite[^]+/g;
+            if (citeTokenRegex.test(finalText)) {
+              const uniqueUrls = Array.from(new Set(urlCitations.map(c => c.url)));
+              const replacement = uniqueUrls.length > 0
+                ? (uniqueUrls.length === 1 ? ` (${uniqueUrls[0]})` : ` (${uniqueUrls.join(', ')})`)
+                : '';
+              finalText = finalText.replace(citeTokenRegex, replacement);
+            }
+
+            if (progressMessage) {
+              try {
+                await progressMessage.edit(finalText || '');
+              } catch (e) {
+                console.error('Failed to set final message content:', e);
+              }
+            } else {
+              await messageMeta.channel.send(finalText || '');
+            }
+
+            resolve(undefined);
+            return;
+          }
+          if (type === 'response.error') {
+            console.error('OpenAI API stream error event:', event);
+            if (!sentAnyProgress) {
+              await messageMeta.channel.send('Oops, my brain short circuited. Say again?');
+            } else if (progressMessage) {
+              try {
+                await progressMessage.edit('Oops, my brain short circuited. Say again?');
+              } catch (e) {
+                console.error('Failed to set error content on progress message:', e);
+              }
+            }
+            resolve(undefined);
+            return;
+          }
+        } catch (e) {
+          console.error('Error in stream event handler:', e);
+          resolve(undefined);
+        }
+      });
+    });
   } catch (error) {
-    console.error("OpenAI API error:", error);
-    return { 
-      text: "Oops, my brain short circuited. Say again?", 
-      generateSpeech: false 
+    console.error('OpenAI API error:', error);
+    return {
+      text: 'Oops, my brain short circuited. Say again?',
+      generateSpeech: false,
     }; // Inform user
   }
 }

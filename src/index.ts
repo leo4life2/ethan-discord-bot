@@ -6,7 +6,7 @@ import {
   ChannelType,
 } from "discord.js";
 import { handle, generateSpeech } from "./logic.js";
-import { REST } from 'discord.js';
+import { REST } from "@discordjs/rest";
 import fs from 'node:fs/promises';
 import { startPresenceRotation } from './presence.js';
 
@@ -45,7 +45,8 @@ async function sendVoiceMessage(channelId: string, filePath: string, seconds: nu
   await fetch(slot.upload_url, {
     method: 'PUT',
     headers: { 'Content-Type': 'audio/ogg' },
-    body: buf,
+    // Cast to any to satisfy BodyInit; node's undici accepts Buffer
+    body: buf as any,
   });
 
   const waveform = Buffer.alloc(256, 128).toString('base64'); // Generate default flat waveform

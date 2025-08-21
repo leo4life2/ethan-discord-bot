@@ -59,10 +59,9 @@ export function startPresenceRotation(client: Client) {
     const initialPick = statusPool[Math.floor(Math.random() * statusPool.length)];
     const initialActivity = typeof initialPick === 'function' ? initialPick(client) : initialPick;
     
-    // Cast to any to bypass incorrect type inference for setPresence
     client.user.setPresence({
       status: PresenceUpdateStatus.Online,
-      activities: [initialActivity],
+      activities: [initialActivity as any],
     })
   }
   
@@ -75,10 +74,9 @@ export function startPresenceRotation(client: Client) {
     const pick = statusPool[Math.floor(Math.random() * statusPool.length)];
     const activity = typeof pick === 'function' ? pick(client) : pick;
 
-    // Cast to any to bypass incorrect type inference for setPresence
     client.user.setPresence({
       status: PresenceUpdateStatus.Online,
-      activities: [activity],
+      activities: [activity as any],
     })
   }, 1000 * 60 * 10);
 } 

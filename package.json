@@ -1,9 +1,10 @@
 {
 	"type": "module",
 	"dependencies": {
+		"@discordjs/rest": "^2",
 		"discord.js": "14",
 		"dotenv": "^16.5.0",
-		"openai": "^4.97.0"
+		"openai": "^5.13.1"
 	},
 	"devDependencies": {
 		"@types/node": "^22.15.14",
