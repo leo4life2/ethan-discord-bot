@@ -267,10 +267,6 @@ export async function handle(
           if (type === 'response.completed') {
             const finalResponse = event?.response ?? event;
             hasCompleted = true;
-            // Debug: print entire final response payload
-            try {
-              console.log('DEBUG finalResponse:', JSON.stringify(finalResponse, null, 2));
-            } catch {}
             let rawText: string | undefined = typeof finalResponse?.output_text === 'string' ? finalResponse.output_text : undefined;
             let structured: EthanResponse | null = null;
             const urlCitations: Array<{ title: string; url: string; start: number; end: number }> = [];
@@ -285,11 +281,6 @@ export async function handle(
                   // Collect URL citations from annotations and replace in-place
                   const anns: any[] = Array.isArray(part?.annotations) ? part.annotations : [];
                   const urlAnns = anns.filter((a) => a?.type === 'url_citation' && typeof a?.url === 'string');
-                  if (anns.length > 0) {
-                    try {
-                      console.log('DEBUG output_text part with annotations:', JSON.stringify(part, null, 2));
-                    } catch {}
-                  }
                   urlAnns.forEach((ann) => {
                     urlCitations.push({
                       title: ann.title,
@@ -322,12 +313,6 @@ export async function handle(
                 // not JSON, proceed with raw text
               }
             }
-
-            // Debug: print collected URL citations array
-            try {
-              // eslint-disable-next-line no-console
-              console.log(JSON.stringify(urlCitations, null, 2));
-            } catch {}
 
             if (!structured && (!rawText || typeof rawText !== 'string' || rawText.trim() === '')) {
               console.warn('OpenAI response content was empty.');
