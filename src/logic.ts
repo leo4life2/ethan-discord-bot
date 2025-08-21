@@ -71,6 +71,15 @@ export async function handle(
   botId: string
 ): Promise<{ text: string; generateSpeech: boolean } | undefined> {
   const systemPrompt = getSystemPrompt(messageMeta.author.username);
+  // Narrow channel type to text-based early to satisfy TypeScript in stricter envs
+  const channel = messageMeta.channel;
+  if (!channel || !channel.isTextBased()) {
+    return {
+      text: "i can only reply in text channels, sorry!",
+      generateSpeech: false,
+    };
+  }
+  const textChannel = channel; // Now typed as TextBasedChannel
 
   // Build Responses API input array
   const inputItems: Array<{
@@ -194,7 +203,7 @@ export async function handle(
       attemptedProgressSend = true; // set BEFORE awaiting to avoid concurrent sends
       progressMessagePromise = (async () => {
         try {
-          const sent = await messageMeta.channel.send(initialText);
+          const sent = await textChannel.send(initialText);
           progressMessage = sent;
           currentProgressText = initialText;
           sentAnyProgress = true;
@@ -318,7 +327,7 @@ export async function handle(
               console.warn('OpenAI response content was empty.');
               const fallback = "My brain's a bit fuzzy, what was that?";
               if (!sentAnyProgress) {
-                await messageMeta.channel.send(fallback);
+                await textChannel.send(fallback);
               } else if (progressMessage) {
                 await safeEdit(fallback);
               }
@@ -350,7 +359,7 @@ export async function handle(
                 console.error('Failed to set final message content:', e);
               }
             } else {
-              await messageMeta.channel.send(finalText || '');
+              await textChannel.send(finalText || '');
             }
 
             resolve(undefined);
@@ -359,7 +368,7 @@ export async function handle(
           if (type === 'response.error') {
             console.error('OpenAI API stream error event:', event);
             if (!sentAnyProgress) {
-              await messageMeta.channel.send('Oops, my brain short circuited. Say again?');
+              await textChannel.send('Oops, my brain short circuited. Say again?');
             } else if (progressMessage) {
               try {
                 await progressMessage.edit('Oops, my brain short circuited. Say again?');
