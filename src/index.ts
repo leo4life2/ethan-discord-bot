@@ -4,11 +4,17 @@ import {
   GatewayIntentBits,
   Events,
   ChannelType,
+  MessageFlags,
+  Routes,
 } from "discord.js";
 import { handle, generateSpeech } from "./logic.js";
 import { REST } from "@discordjs/rest";
 import fs from 'node:fs/promises';
 import { startPresenceRotation } from './presence.js';
+import * as PromptView from './commands/prompt-view.js';
+import * as PromptEdit from './commands/prompt-edit.js';
+import * as PromptHistory from './commands/prompt-history.js';
+import * as PromptRollback from './commands/prompt-rollback.js';
 
 const TOKEN = process.env.DISCORD_TOKEN!;
 const ETHAN_CHANNEL_ID = "1266202723448000650"; // talk-to-ethan
@@ -67,10 +73,69 @@ async function sendVoiceMessage(channelId: string, filePath: string, seconds: nu
   );
 }
 
-client.once(Events.ClientReady, (readyClient) => {
+async function registerSlashCommands(readyClient: any) {
+  try {
+    // Ensure application data is loaded
+    if (!readyClient.application) {
+      await readyClient.fetchApplication?.();
+    } else {
+      await readyClient.application.fetch?.();
+    }
+    const CLIENT_ID = readyClient.application?.id;
+    const GUILD_ID = process.env.DISCORD_GUILD_ID || '1261542082124972193';
+    if (!CLIENT_ID) {
+      console.warn('Unable to resolve application id; skipping command registration');
+      return;
+    }
+    const commandBodies = [
+      (PromptView as any).data.toJSON(),
+      (PromptEdit as any).data.toJSON(),
+      (PromptHistory as any).data.toJSON(),
+      (PromptRollback as any).data.toJSON(),
+    ];
+    // Always register to the target guild for immediate availability
+    await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commandBodies });
+    console.log(`✅ Registered guild commands in ${GUILD_ID}`);
+  } catch (e) {
+    console.error('Failed to register slash commands:', e);
+  }
+}
+
+client.once(Events.ClientReady, async (readyClient) => {
   console.log(`✨ Logged in as ${readyClient.user.tag}`);
   if (readyClient.user) { // Ensure client.user is available
     startPresenceRotation(readyClient); // Start new presence rotation
+  }
+  await registerSlashCommands(readyClient);
+});
+
+// Register interaction handler for slash commands
+const commands = new Map<string, { execute: (interaction: any) => Promise<any> }>([
+  ['prompt-view', { execute: PromptView.execute }],
+  ['prompt-edit', { execute: PromptEdit.execute }],
+  ['show-edit-history', { execute: PromptHistory.execute }],
+  ['prompt-rollback', { execute: PromptRollback.execute }],
+]);
+
+client.on(Events.InteractionCreate, async (interaction: any) => {
+  try {
+    if (!interaction.isChatInputCommand()) return;
+    const handler = commands.get(interaction.commandName);
+    if (!handler) {
+      return interaction.reply({ content: 'Unknown command.', flags: MessageFlags.Ephemeral });
+    }
+    await handler.execute(interaction);
+  } catch (err) {
+    console.error('Error handling interaction:', err);
+    if (interaction.isRepliable()) {
+      try {
+        await interaction.reply({ content: 'Command failed.', flags: MessageFlags.Ephemeral });
+      } catch {
+        try {
+          await interaction.editReply({ content: 'Command failed.' });
+        } catch {/* ignore */}
+      }
+    }
   }
 });
 
