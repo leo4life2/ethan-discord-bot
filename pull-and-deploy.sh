@@ -26,8 +26,6 @@ SESSION="ethan-discord-bot"
 if tmux has-session -t "$SESSION" 2>/dev/null; then
   tmux kill-session -t "$SESSION"
 fi
-tmux new-session -d -s "$SESSION" "node dist/index.js"
-
 tmux new-session -d -s "$SESSION" "bash -lc 'while true; do node dist/index.js; echo Restarting in 2s...; sleep 2; done'"
 
 echo "===> Deployed commit $(git rev-parse --short HEAD)"
