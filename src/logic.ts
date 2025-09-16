@@ -128,6 +128,42 @@ function getSystemPrompt(userName: string): string {
     .replace('{userName}', userName);
 }
 
+/**
+ * Split a long string into Discord-safe message chunks (<= 2000 chars),
+ * preferring to break on paragraph or line boundaries.
+ */
+function splitIntoDiscordMessages(text: string, maxLength = 2000): string[] {
+  if (!text) return [""];
+  if (text.length <= maxLength) return [text];
+
+  const hardLimit = Math.max(1, Math.min(maxLength, 2000));
+  const softLimit = Math.max(1, hardLimit - 50); // leave a little headroom
+
+  const chunks: string[] = [];
+  let remaining = text;
+
+  while (remaining.length > hardLimit) {
+    // Try to split on double newline, then single newline, then space
+    let splitIdx = -1;
+    const candidate = remaining.slice(0, softLimit);
+
+    splitIdx = candidate.lastIndexOf("\n\n");
+    if (splitIdx === -1) splitIdx = candidate.lastIndexOf("\n");
+    if (splitIdx === -1) splitIdx = candidate.lastIndexOf(" ");
+    if (splitIdx === -1 || splitIdx < softLimit * 0.5) {
+      // Fallback: hard cut
+      splitIdx = hardLimit;
+    }
+
+    const part = remaining.slice(0, splitIdx).trimEnd();
+    chunks.push(part);
+    remaining = remaining.slice(splitIdx).trimStart();
+  }
+
+  if (remaining.length > 0) chunks.push(remaining);
+  return chunks;
+}
+
 // Using Responses API; message parts will be constructed inline as needed
 
 /** Interface for the structured output from OpenAI */
@@ -449,12 +485,21 @@ export async function handle(
 
             if (progressMessage) {
               try {
-                await progressMessage.edit(finalText || '');
+                const chunks = splitIntoDiscordMessages(finalText || '');
+                if (chunks.length > 0) {
+                  await progressMessage.edit(chunks[0]);
+                  for (let i = 1; i < chunks.length; i++) {
+                    await textChannel.send(chunks[i]);
+                  }
+                }
               } catch (e) {
                 console.error('Failed to set final message content:', e);
               }
             } else {
-              await textChannel.send(finalText || '');
+              const chunks = splitIntoDiscordMessages(finalText || '');
+              for (const chunk of chunks) {
+                await textChannel.send(chunk);
+              }
             }
 
             resolve(undefined);
