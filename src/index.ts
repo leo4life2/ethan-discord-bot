@@ -19,6 +19,10 @@ import * as LearnCommand from './commands/learn.js';
 import { renderLearnMessage } from './commands/learn.js';
 import { getLearnSession, setLearnItemStatus, isSessionComplete, removeLearnSession } from './learnSessions.js';
 import { appendKnowledge } from './knowledgeStore.js';
+import * as ViewKnowledge from './commands/view-knowledge.js';
+import * as EditKnowledge from './commands/edit-knowledge.js';
+import * as KnowledgeHistory from './commands/knowledge-history.js';
+import * as KnowledgeRollback from './commands/knowledge-rollback.js';
 
 const TOKEN = process.env.DISCORD_TOKEN!;
 const ETHAN_CHANNEL_ID = "1266202723448000650"; // talk-to-ethan
@@ -97,6 +101,10 @@ async function registerSlashCommands(readyClient: any) {
       (PromptHistory as any).data.toJSON(),
       (PromptRollback as any).data.toJSON(),
       (LearnCommand as any).data.toJSON(),
+      (ViewKnowledge as any).data.toJSON(),
+      (EditKnowledge as any).data.toJSON(),
+      (KnowledgeHistory as any).data.toJSON(),
+      (KnowledgeRollback as any).data.toJSON(),
     ];
     // Always register to the target guild for immediate availability
     await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commandBodies });
@@ -121,6 +129,10 @@ const commands = new Map<string, { execute: (interaction: any) => Promise<any> }
   ['show-edit-history', { execute: PromptHistory.execute }],
   ['prompt-rollback', { execute: PromptRollback.execute }],
   ['learn', { execute: LearnCommand.execute }],
+  ['view-knowledge-base', { execute: ViewKnowledge.execute }],
+  ['edit-knowledge-base', { execute: EditKnowledge.execute }],
+  ['show-knowledge-history', { execute: KnowledgeHistory.execute }],
+  ['knowledge-rollback', { execute: KnowledgeRollback.execute }],
 ]);
 
 client.on(Events.InteractionCreate, async (interaction: any) => {
@@ -161,16 +173,11 @@ client.on(Events.InteractionCreate, async (interaction: any) => {
 
       const updatedItem = setLearnItemStatus(sessionId, index, status);
       if (!updatedItem) {
-        await interaction.reply({ content: 'Item already handled.', flags: MessageFlags.Ephemeral });
+        await interaction.deferUpdate().catch(() => {});
         return;
       }
 
-      await interaction.reply({ content: status === 'approved' ? '✅ Approved.' : '❌ Rejected.', flags: MessageFlags.Ephemeral });
-
       const updatedSession = getLearnSession(sessionId);
-      if (updatedSession) {
-        await interaction.editReply(renderLearnMessage(updatedSession));
-      }
 
       if (isSessionComplete(sessionId)) {
         const finalSession = getLearnSession(sessionId);
@@ -182,11 +189,15 @@ client.on(Events.InteractionCreate, async (interaction: any) => {
                 text: item.text,
                 added_at: new Date().toISOString(),
               })),
+              interaction.user.tag,
+              `learn session ${sessionId} (${approved.length} new)`
             );
           }
-          await interaction.editReply(renderLearnMessage(finalSession));
+          await interaction.update(renderLearnMessage(finalSession));
         }
         removeLearnSession(sessionId);
+      } else if (updatedSession) {
+        await interaction.update(renderLearnMessage(updatedSession));
       }
 
       return;
