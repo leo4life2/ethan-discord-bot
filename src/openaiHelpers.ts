@@ -1,8 +1,10 @@
 import { openai } from './openaiClient.js';
 import type { KnowledgeEntry } from './knowledgeStore.js';
 
-const RESPONSE_SCHEMA = {
-  name: 'learn_facts',
+const TEXT_FORMAT: any = {
+  type: 'json_schema',
+  name: 'learn_facts_format',
+  strict: true,
   schema: {
     type: 'object',
     additionalProperties: false,
@@ -17,12 +19,6 @@ const RESPONSE_SCHEMA = {
     },
     required: ['facts'],
   },
-  strict: true,
-} as const;
-
-const TEXT_FORMAT: any = {
-  type: 'json_schema',
-  json_schema: RESPONSE_SCHEMA,
 };
 
 export async function extractLearnedFacts(
