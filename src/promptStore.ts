@@ -94,8 +94,8 @@ export async function savePrompt(text: string, who: string, commitMessage: strin
     commitMessage,
   };
   const versions = [...store.versions, version];
-  // Keep at most 11 (latest + 10 previous)
-  const maxKeep = 11;
+  // Keep at most 21 (latest + 20 previous)
+  const maxKeep = 21;
   const trimmed = versions.length > maxKeep ? versions.slice(versions.length - maxKeep) : versions;
   const nextStore: PromptStoreData = { latestId: version.id, versions: trimmed };
   await writeRaw(nextStore);

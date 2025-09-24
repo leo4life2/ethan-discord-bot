@@ -20,7 +20,7 @@ interface KnowledgeStoreData {
   versions: KnowledgeVersion[];
 }
 
-const MAX_VERSIONS = 11;
+const MAX_VERSIONS = 21;
 
 async function readRaw(): Promise<any | null> {
   try {
