@@ -21,6 +21,14 @@ Instructions:
 
   const response = await openai.responses.create({
     model: 'gpt-5-mini',
+    text: {
+      format: { type: 'text' },
+      verbosity: 'medium',
+    },
+    reasoning: {
+      effort: 'minimal',
+      summary: 'auto',
+    },
     input: [
       {
         role: 'system',

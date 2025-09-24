@@ -14,6 +14,7 @@ import { createLearnSession, type LearnSession } from '../learnSessions.js';
 
 const MAX_FETCH = 50;
 const MIN_FETCH = 30;
+const MAX_BUTTON_ROWS = 5;
 
 export const data = new SlashCommandBuilder()
   .setName('learn')
@@ -47,11 +48,7 @@ async function fetchContext(interaction: ChatInputCommandInteraction) {
   const channel = interaction.channel;
   if (!channel || !channel.isTextBased()) return [];
   const fetched = await channel.messages.fetch({ limit: MAX_FETCH });
-  const messages = Array.from(fetched.values()).sort((a, b) => a.createdTimestamp - b.createdTimestamp);
-  if (messages.length > MIN_FETCH) {
-    return messages.slice(messages.length - MIN_FETCH);
-  }
-  return messages;
+  return Array.from(fetched.values()).sort((a, b) => a.createdTimestamp - b.createdTimestamp);
 }
 
 export async function execute(interaction: ChatInputCommandInteraction) {
@@ -76,7 +73,9 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     return interaction.editReply('No new facts detected.');
   }
 
-  const session = createLearnSession(interaction.user.id, candidates);
+  const sessionCandidates = candidates.slice(0, MAX_BUTTON_ROWS);
+  const skipped = candidates.length - sessionCandidates.length;
+  const session = createLearnSession(interaction.user.id, sessionCandidates, skipped > 0 ? skipped : 0);
   const render = renderLearnMessage(session);
 
   await interaction.editReply(render as any);
@@ -94,7 +93,10 @@ function formatStatus(status: string): string {
 }
 
 export function renderLearnMessage(session: LearnSession) {
-  const header = 'Approve any new knowledge points below.';
+  let header = 'Approve any new knowledge points below.';
+  if (session.skipped > 0) {
+    header += ` (showing first ${session.items.length}, ${session.skipped} more skipped)`;
+  }
   const list = session.items
     .map((item, idx) => `${idx + 1}. ${item.text} — ${formatStatus(item.status)}`)
     .join('\n');

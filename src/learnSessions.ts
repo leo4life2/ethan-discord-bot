@@ -12,16 +12,18 @@ export interface LearnSession {
   initiatorId: string;
   createdAt: number;
   items: LearnItem[];
+  skipped: number;
 }
 
 const sessions = new Map<string, LearnSession>();
 
-export function createLearnSession(initiatorId: string, texts: string[]): LearnSession {
+export function createLearnSession(initiatorId: string, texts: string[], skipped = 0): LearnSession {
   const session: LearnSession = {
     id: randomUUID(),
     initiatorId,
     createdAt: Date.now(),
     items: texts.map((text) => ({ text, status: 'pending' })),
+    skipped,
   };
   sessions.set(session.id, session);
   return session;
