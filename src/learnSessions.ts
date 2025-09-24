@@ -12,9 +12,6 @@ export interface LearnSession {
   initiatorId: string;
   createdAt: number;
   items: LearnItem[];
-  messageId?: string;
-  channelId?: string;
-  guildId?: string;
 }
 
 const sessions = new Map<string, LearnSession>();
@@ -28,14 +25,6 @@ export function createLearnSession(initiatorId: string, texts: string[]): LearnS
   };
   sessions.set(session.id, session);
   return session;
-}
-
-export function setLearnSessionMessage(sessionId: string, messageId: string, channelId: string, guildId?: string) {
-  const session = sessions.get(sessionId);
-  if (!session) return;
-  session.messageId = messageId;
-  session.channelId = channelId;
-  session.guildId = guildId;
 }
 
 export function getLearnSession(id: string): LearnSession | undefined {

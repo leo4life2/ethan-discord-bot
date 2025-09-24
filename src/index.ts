@@ -123,18 +123,6 @@ const commands = new Map<string, { execute: (interaction: any) => Promise<any> }
   ['learn', { execute: LearnCommand.execute }],
 ]);
 
-async function updateLearnMessage(sessionId: string, session: any) {
-  if (!session.channelId || !session.messageId) return;
-  try {
-    const channel = await client.channels.fetch(session.channelId);
-    if (!channel || !channel.isTextBased()) return;
-    const message = await channel.messages.fetch(session.messageId);
-    await message.edit(renderLearnMessage(session));
-  } catch (error) {
-    console.error('Failed to update learn message:', error);
-  }
-}
-
 client.on(Events.InteractionCreate, async (interaction: any) => {
   try {
     if (interaction.isChatInputCommand()) {
@@ -181,7 +169,7 @@ client.on(Events.InteractionCreate, async (interaction: any) => {
 
       const updatedSession = getLearnSession(sessionId);
       if (updatedSession) {
-        await updateLearnMessage(sessionId, updatedSession);
+        await interaction.editReply(renderLearnMessage(updatedSession));
       }
 
       if (isSessionComplete(sessionId)) {
@@ -196,7 +184,7 @@ client.on(Events.InteractionCreate, async (interaction: any) => {
               })),
             );
           }
-          await updateLearnMessage(sessionId, finalSession);
+          await interaction.editReply(renderLearnMessage(finalSession));
         }
         removeLearnSession(sessionId);
       }

@@ -10,7 +10,7 @@ import {
 import { hasEditorPermission } from '../utils/permissions.js';
 import { extractLearnedFacts } from '../openaiHelpers.js';
 import { loadKnowledge } from '../knowledgeStore.js';
-import { createLearnSession, setLearnSessionMessage, type LearnSession } from '../learnSessions.js';
+import { createLearnSession, type LearnSession } from '../learnSessions.js';
 
 const MAX_FETCH = 50;
 const MIN_FETCH = 30;
@@ -20,14 +20,15 @@ export const data = new SlashCommandBuilder()
   .setDescription('Capture new knowledge from the recent conversation');
 
 function buildButtons(sessionId: string, index: number, status: string) {
+  const displayNumber = `${index + 1}`;
   const approve = new ButtonBuilder()
     .setCustomId(`learn:${sessionId}:${index}:approve`)
-    .setLabel('✅')
+    .setLabel(`${displayNumber} ✅`)
     .setStyle(ButtonStyle.Success)
     .setDisabled(status !== 'pending');
   const reject = new ButtonBuilder()
     .setCustomId(`learn:${sessionId}:${index}:reject`)
-    .setLabel('❌')
+    .setLabel(`${displayNumber} ❌`)
     .setStyle(ButtonStyle.Danger)
     .setDisabled(status !== 'pending');
   return new ActionRowBuilder<ButtonBuilder>().addComponents(approve, reject);
@@ -78,10 +79,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   const session = createLearnSession(interaction.user.id, candidates);
   const render = renderLearnMessage(session);
 
-  const message = await interaction.editReply(render as any);
-  if (message) {
-    setLearnSessionMessage(session.id, message.id, message.channelId, message.guildId ?? undefined);
-  }
+  await interaction.editReply(render as any);
 }
 
 function formatStatus(status: string): string {
