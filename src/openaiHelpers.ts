@@ -1,6 +1,30 @@
 import { openai } from './openaiClient.js';
 import type { KnowledgeEntry } from './knowledgeStore.js';
 
+const RESPONSE_SCHEMA = {
+  name: 'learn_facts',
+  schema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      facts: {
+        type: 'array',
+        description: 'Unique, concise factual statements to add to the knowledge base.',
+        items: {
+          type: 'string',
+        },
+      },
+    },
+    required: ['facts'],
+  },
+  strict: true,
+} as const;
+
+const TEXT_FORMAT: any = {
+  type: 'json_schema',
+  json_schema: RESPONSE_SCHEMA,
+};
+
 export async function extractLearnedFacts(
   messagesBlock: string,
   existingKnowledge: KnowledgeEntry[],
@@ -14,50 +38,51 @@ ${messagesBlock}
 
 Instructions:
 - Identify only new facts or procedures that are not already covered in the existing knowledge.
-- Facts must be accurate statements from the transcript, phrased in one concise sentence.
-- Ignore small talk or policy reminders.
-- Return a JSON array of strings. Return [] if there is nothing new.
+- Facts must be accurate statements from the transcript, phrased in ONE sentence each.
+- Ignore small talk, opinions, or temporary offers.
+- If nothing new is present, return an empty array.
 `;
 
   const response = await openai.responses.create({
     model: 'gpt-5-mini',
-    text: {
-      format: { type: 'text' },
-      verbosity: 'medium',
-    },
-    reasoning: {
-      effort: 'minimal',
-      summary: 'auto',
-    },
     input: [
       {
         role: 'system',
-        content: [{ type: 'input_text', text: 'You respond with valid JSON only.' }],
+        content: [{ type: 'input_text', text: 'Respond using the provided JSON schema only.' }],
       },
       {
         role: 'user',
         content: [{ type: 'input_text', text: prompt }],
       },
     ],
+    text: {
+      format: TEXT_FORMAT,
+      verbosity: 'medium',
+    },
     metadata: { purpose: 'learn-extraction' },
   });
 
-  const raw = response.output_text;
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) {
-      return parsed.map((item) => String(item).trim()).filter((item) => item.length > 0);
+  const facts: string[] = [];
+  const outputs = Array.isArray((response as any).output) ? (response as any).output : [];
+
+  for (const item of outputs) {
+    const parts = Array.isArray(item?.content) ? item.content : [];
+    for (const part of parts) {
+      if (part?.refusal) {
+        console.warn('Learn extraction refusal:', part.refusal);
+        continue;
+      }
+      const parsedFacts = part?.parsed?.facts;
+      if (Array.isArray(parsedFacts)) {
+        parsedFacts
+          .map((entry: unknown) => String(entry ?? '').trim())
+          .filter((entry: string) => entry.length > 0)
+          .forEach((entry: string) => facts.push(entry));
+      }
     }
-    if (Array.isArray(parsed.items)) {
-      return parsed.items
-        .map((item: unknown) => String(item ?? '').trim())
-        .filter((candidate: string) => candidate.length > 0);
-    }
-  } catch (err) {
-    console.error('Failed to parse learn extraction response:', err, raw);
   }
-  return [];
+
+  return Array.from(new Set(facts));
 }
 
 

@@ -7,6 +7,23 @@ import { openai } from './openaiClient.js';
 
 let lastTtsTimestamp = 0;
 
+const ETHAN_RESPONSE_TEXT_FORMAT: any = {
+  type: 'json_schema',
+  json_schema: {
+    name: 'ethan_discord_reply',
+    strict: true,
+    schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        say_in_discord: { type: 'string' },
+        generate_speech: { type: 'boolean' },
+      },
+      required: ['say_in_discord', 'generate_speech'],
+    },
+  },
+};
+
 function generateKnowledgeSection(entries: { text: string; added_at: string }[]): string {
   if (!entries.length) return '';
   const lastUpdated = entries[0]?.added_at ?? new Date().toISOString();
@@ -283,7 +300,7 @@ export async function handle(
       model: 'gpt-5-mini',
       input: inputItems as any,
       text: {
-        format: { type: 'text' },
+        format: ETHAN_RESPONSE_TEXT_FORMAT,
         verbosity: 'medium',
       },
       reasoning: {
@@ -346,7 +363,7 @@ export async function handle(
                   // Do not inline replace by indices (could shift positions across parts). Instead, save to urlCitations and handle cite tokens after.
 
                   rawText = (rawText || '') + replaced;
-                } else if ((partType === 'json' || partType === 'tool_result') && part?.parsed) {
+                } else if ((partType === 'json' || partType === 'tool_result' || partType === 'output_json_schema') && part?.parsed) {
                   try {
                     structured = part.parsed as EthanResponse;
                   } catch {
