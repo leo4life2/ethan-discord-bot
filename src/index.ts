@@ -15,6 +15,10 @@ import * as PromptView from './commands/prompt-view.js';
 import * as PromptEdit from './commands/prompt-edit.js';
 import * as PromptHistory from './commands/prompt-history.js';
 import * as PromptRollback from './commands/prompt-rollback.js';
+import * as LearnCommand from './commands/learn.js';
+import { renderLearnMessage } from './commands/learn.js';
+import { getLearnSession, setLearnItemStatus, isSessionComplete, removeLearnSession } from './learnSessions.js';
+import { appendKnowledge } from './knowledgeStore.js';
 
 const TOKEN = process.env.DISCORD_TOKEN!;
 const ETHAN_CHANNEL_ID = "1266202723448000650"; // talk-to-ethan
@@ -92,6 +96,7 @@ async function registerSlashCommands(readyClient: any) {
       (PromptEdit as any).data.toJSON(),
       (PromptHistory as any).data.toJSON(),
       (PromptRollback as any).data.toJSON(),
+      (LearnCommand as any).data.toJSON(),
     ];
     // Always register to the target guild for immediate availability
     await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commandBodies });
@@ -115,16 +120,89 @@ const commands = new Map<string, { execute: (interaction: any) => Promise<any> }
   ['prompt-edit', { execute: PromptEdit.execute }],
   ['show-edit-history', { execute: PromptHistory.execute }],
   ['prompt-rollback', { execute: PromptRollback.execute }],
+  ['learn', { execute: LearnCommand.execute }],
 ]);
+
+async function updateLearnMessage(sessionId: string, session: any) {
+  if (!session.channelId || !session.messageId) return;
+  try {
+    const channel = await client.channels.fetch(session.channelId);
+    if (!channel || !channel.isTextBased()) return;
+    const message = await channel.messages.fetch(session.messageId);
+    await message.edit(renderLearnMessage(session));
+  } catch (error) {
+    console.error('Failed to update learn message:', error);
+  }
+}
 
 client.on(Events.InteractionCreate, async (interaction: any) => {
   try {
-    if (!interaction.isChatInputCommand()) return;
-    const handler = commands.get(interaction.commandName);
-    if (!handler) {
-      return interaction.reply({ content: 'Unknown command.', flags: MessageFlags.Ephemeral });
+    if (interaction.isChatInputCommand()) {
+      const handler = commands.get(interaction.commandName);
+      if (!handler) {
+        return interaction.reply({ content: 'Unknown command.', flags: MessageFlags.Ephemeral });
+      }
+      await handler.execute(interaction);
+      return;
     }
-    await handler.execute(interaction);
+
+    if (interaction.isButton()) {
+      const customId = interaction.customId;
+      if (!customId.startsWith('learn:')) return;
+      const parts = customId.split(':');
+      if (parts.length !== 4) return;
+      const [, sessionId, indexStr, action] = parts;
+      const index = Number(indexStr);
+      if (!Number.isInteger(index)) return;
+
+      const session = getLearnSession(sessionId);
+      if (!session) {
+        await interaction.reply({ content: 'Session not found.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      if (interaction.user.id !== session.initiatorId) {
+        await interaction.reply({ content: 'Only the initiator can approve/reject.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      const status = action === 'approve' ? 'approved' : action === 'reject' ? 'rejected' : null;
+      if (!status) {
+        return;
+      }
+
+      const updatedItem = setLearnItemStatus(sessionId, index, status);
+      if (!updatedItem) {
+        await interaction.reply({ content: 'Item already handled.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      await interaction.reply({ content: status === 'approved' ? '✅ Approved.' : '❌ Rejected.', flags: MessageFlags.Ephemeral });
+
+      const updatedSession = getLearnSession(sessionId);
+      if (updatedSession) {
+        await updateLearnMessage(sessionId, updatedSession);
+      }
+
+      if (isSessionComplete(sessionId)) {
+        const finalSession = getLearnSession(sessionId);
+        if (finalSession) {
+          const approved = finalSession.items.filter((item) => item.status === 'approved');
+          if (approved.length > 0) {
+            await appendKnowledge(
+              approved.map((item) => ({
+                text: item.text,
+                added_at: new Date().toISOString(),
+              })),
+            );
+          }
+          await updateLearnMessage(sessionId, finalSession);
+        }
+        removeLearnSession(sessionId);
+      }
+
+      return;
+    }
   } catch (err) {
     console.error('Error handling interaction:', err);
     if (interaction.isRepliable()) {

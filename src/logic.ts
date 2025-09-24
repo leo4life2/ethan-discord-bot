@@ -1,14 +1,23 @@
 import type { Message } from "discord.js";
-import OpenAI from "openai";
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { loadPrompt } from './promptStore.js';
-
-// Initialize OpenAI client. It automatically uses the OPENAI_API_KEY environment variable.
-const openai = new OpenAI();
+import { loadKnowledge } from './knowledgeStore.js';
+import { openai } from './openaiClient.js';
 
 let lastTtsTimestamp = 0;
 
+function generateKnowledgeSection(entries: { text: string; added_at: string }[]): string {
+  if (!entries.length) return '';
+  const lastUpdated = entries[0]?.added_at ?? new Date().toISOString();
+  const lines = entries.map((entry) => {
+    const dateLabel = entry.added_at ? ` (${entry.added_at})` : '';
+    return `- ${entry.text}${dateLabel}`;
+  });
+  return `[Server Knowledge — last updated ${lastUpdated}]
+
+${lines.join('\n')}`;
+}
 
 /**
  * Generate a system prompt with dynamic values.
@@ -17,7 +26,16 @@ async function getSystemPrompt(userName: string): Promise<string> {
   const currentDate = new Date().toLocaleDateString();
   const stored = await loadPrompt();
   const base = stored ? (stored.text ?? '') : '';
-  return base
+  const knowledge = await loadKnowledge();
+  const knowledgeSection = knowledge.length > 0
+    ? generateKnowledgeSection(knowledge)
+    : '';
+  const promptWithKnowledge = knowledgeSection
+    ? `${knowledgeSection}
+
+${base}`
+    : base;
+  return promptWithKnowledge
     .replace('{currentDate}', currentDate)
     .replace('{userName}', userName);
 }

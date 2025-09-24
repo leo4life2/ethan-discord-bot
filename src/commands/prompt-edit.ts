@@ -1,12 +1,6 @@
 import { SlashCommandBuilder, MessageFlags } from 'discord.js';
-import { EDITOR_ROLE_ID, EDITOR_USER_IDS } from '../config.js';
+import { hasEditorPermission } from '../utils/permissions.js';
 import { savePrompt } from '../promptStore.js';
-
-function canEdit(interaction: any): boolean {
-  if (!interaction.inGuild()) return false;
-  if (Array.isArray(EDITOR_USER_IDS) && EDITOR_USER_IDS.includes(interaction.user.id)) return true;
-  return interaction.member?.roles?.cache?.has?.(EDITOR_ROLE_ID) === true;
-}
 
 export const data = new SlashCommandBuilder()
   .setName('prompt-edit')
@@ -18,7 +12,7 @@ export async function execute(interaction: any) {
   if (!interaction.inGuild()) {
     return interaction.reply({ content: 'Use this in a server.', flags: MessageFlags.Ephemeral });
   }
-  if (!canEdit(interaction)) {
+  if (!hasEditorPermission(interaction)) {
     return interaction.reply({ content: 'No permission.', flags: MessageFlags.Ephemeral });
   }
   const message = interaction.options.getString('message', true);
