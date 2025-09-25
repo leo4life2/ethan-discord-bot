@@ -78,7 +78,39 @@ Instructions:
           .map((entry: unknown) => String(entry ?? '').trim())
           .filter((entry: string) => entry.length > 0)
           .forEach((entry: string) => facts.push(entry));
+        continue;
       }
+
+      if (part?.type === 'output_text' && typeof part?.text === 'string') {
+        try {
+          const text = part.text.trim();
+          if (text.startsWith('{')) {
+            const parsed = JSON.parse(text);
+            if (Array.isArray(parsed?.facts)) {
+              parsed.facts
+                .map((entry: unknown) => String(entry ?? '').trim())
+                .filter((entry: string) => entry.length > 0)
+                .forEach((entry: string) => facts.push(entry));
+            }
+          }
+        } catch (err) {
+          console.warn('[learn] Failed to parse output_text JSON', err);
+        }
+      }
+    }
+  }
+
+  if (facts.length === 0 && typeof (response as any).output_text === 'string') {
+    try {
+      const parsed = JSON.parse(((response as any).output_text as string).trim());
+      if (Array.isArray(parsed?.facts)) {
+        parsed.facts
+          .map((entry: unknown) => String(entry ?? '').trim())
+          .filter((entry: string) => entry.length > 0)
+          .forEach((entry: string) => facts.push(entry));
+      }
+    } catch (err) {
+      console.warn('[learn] Failed to parse response.output_text JSON', err);
     }
   }
 
