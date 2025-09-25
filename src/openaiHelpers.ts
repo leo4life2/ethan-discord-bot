@@ -11,6 +11,8 @@ const TEXT_FORMAT: any = {
     properties: {
       facts: {
         type: 'array',
+        minItems: 1,
+        maxItems: 5,
         description: 'Unique, concise factual statements to add to the knowledge base.',
         items: {
           type: 'string',
@@ -114,7 +116,15 @@ Instructions:
     }
   }
 
-  return Array.from(new Set(facts));
+  const unique = Array.from(new Set(facts));
+  if (unique.length === 0) {
+    try {
+      console.debug('[learn] No facts parsed, raw response:', JSON.stringify(response, null, 2));
+    } catch (logErr) {
+      console.warn('[learn] Failed to stringify raw response', logErr);
+    }
+  }
+  return unique;
 }
 
 
