@@ -51,6 +51,10 @@ Instructions:
         content: [{ type: 'input_text', text: prompt }],
       },
     ],
+    reasoning: {
+      effort: 'minimal',
+      summary: 'auto',
+    },
     text: {
       format: TEXT_FORMAT,
       verbosity: 'medium',

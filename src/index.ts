@@ -81,8 +81,6 @@ async function sendVoiceMessage(channelId: string, filePath: string, seconds: nu
   );
 }
 
-export { sendVoiceMessage };
-
 async function registerSlashCommands(readyClient: any) {
   try {
     // Ensure application data is loaded

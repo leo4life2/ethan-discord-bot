@@ -4,7 +4,6 @@ import fs from 'node:fs/promises';
 import { loadPrompt } from './promptStore.js';
 import { loadKnowledge } from './knowledgeStore.js';
 import { openai } from './openaiClient.js';
-import { sendVoiceMessage } from './index.js';
 
 let lastTtsTimestamp = 0;
 
@@ -395,59 +394,36 @@ export async function handle(
             }
 
             let finalText = (structured?.say_in_discord ?? rawText ?? '')
-              .replace(/^\s*(\[Ethan\]:|Ethan:)\s*/i, '')
+              .replace(/^\s*(\\[Ethan\\]:|Ethan:)\s*/i, '')
               .replace(/^\s*Voice message:\s*/i, '')
               .trim();
 
+            // Replace any cite tokens like "citeturn0forecast0" with URL(s)
+            // Match ligature-like private-use tokens we observed: "cite..."
+            // Build regex by embedding the specific chars directly to avoid escaping issues
             const citeTokenRegex = /cite[^]+/g;
             if (citeTokenRegex.test(finalText)) {
-              const uniqueUrls = Array.from(new Set(urlCitations.map((c) => c.url)));
+              const uniqueUrls = Array.from(new Set(urlCitations.map(c => c.url)));
               const replacement = uniqueUrls.length > 0
                 ? (uniqueUrls.length === 1 ? ` (${uniqueUrls[0]})` : ` (${uniqueUrls.join(', ')})`)
                 : '';
               finalText = finalText.replace(citeTokenRegex, replacement);
             }
 
-            let voiceDelivered = false;
-            if (structured?.generate_speech) {
-              try {
-                const speech = await generateSpeech(finalText);
-                if (speech) {
-                  const audioFileNameWithExt = `voice_message_${Date.now()}.ogg`;
-                  await sendVoiceMessage(
-                    textChannel.id ?? messageMeta.channel.id,
-                    speech.filePath,
-                    speech.duration,
-                    audioFileNameWithExt,
-                    finalText,
-                  );
-                  await fs.unlink(speech.filePath).catch(console.error);
-                  voiceDelivered = true;
-                }
-              } catch (err) {
-                console.error('Error generating or sending speech:', err);
-              }
-
-              if (voiceDelivered) {
-                resolve(undefined);
-                return;
-              }
-            }
-
-            const chunks = splitIntoDiscordMessages(finalText || '');
-
             if (progressMessage) {
               try {
+                const chunks = splitIntoDiscordMessages(finalText || '');
                 if (chunks.length > 0) {
                   await progressMessage.edit(chunks[0]);
+                  for (let i = 1; i < chunks.length; i++) {
+                    await textChannel.send(chunks[i]);
+                  }
                 }
               } catch (e) {
                 console.error('Failed to set final message content:', e);
               }
-              for (let i = 1; i < chunks.length; i++) {
-                await textChannel.send(chunks[i]);
-              }
             } else {
+              const chunks = splitIntoDiscordMessages(finalText || '');
               for (const chunk of chunks) {
                 await textChannel.send(chunk);
               }
