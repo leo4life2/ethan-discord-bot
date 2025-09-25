@@ -18,7 +18,13 @@ const MAX_BUTTON_ROWS = 5;
 
 export const data = new SlashCommandBuilder()
   .setName('learn')
-  .setDescription('Capture new knowledge from the recent conversation');
+  .setDescription('Capture new knowledge from the recent conversation')
+  .addStringOption((option) =>
+    option
+      .setName('focus')
+      .setDescription('Optional focus/topic hint for the knowledge extractor')
+      .setRequired(false),
+  );
 
 function buildButtons(sessionId: string, index: number, status: string) {
   const displayNumber = `${index + 1}`;
@@ -67,7 +73,8 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
   const transcript = formatTranscript(messages);
   const knowledge = await loadKnowledge();
-  const candidates = await extractLearnedFacts(transcript, knowledge);
+  const focus = interaction.options.getString('focus')?.trim() || undefined;
+  const candidates = await extractLearnedFacts(transcript, knowledge, focus);
 
   if (candidates.length === 0) {
     return interaction.editReply('No new facts detected.');

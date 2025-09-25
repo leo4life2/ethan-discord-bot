@@ -26,6 +26,7 @@ const TEXT_FORMAT: any = {
 export async function extractLearnedFacts(
   messagesBlock: string,
   existingKnowledge: KnowledgeEntry[],
+  focus?: string,
 ): Promise<string[]> {
   const prompt = `You maintain a short bullet list of facts that help a support bot answer questions accurately.
 Existing knowledge (newest first):
@@ -39,6 +40,7 @@ Instructions:
 - Facts must be accurate statements from the transcript, phrased in ONE sentence each.
 - Ignore small talk, opinions, or temporary offers.
 - If nothing new is present, return an empty array.
+- Focus/topic hint from staff: ${focus ?? 'none provided, use your best judgment.'}
 `;
 
   const response = await openai.responses.create({
