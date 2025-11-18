@@ -44,7 +44,7 @@ Instructions:
 `;
 
   const response = await openai.responses.create({
-    model: 'gpt-5-mini',
+    model: 'gpt-5.1',
     input: [
       {
         role: 'system',

@@ -295,7 +295,7 @@ export async function handle(
     };
 
     const stream = await openai.responses.stream({
-      model: 'gpt-5-mini',
+      model: 'gpt-5.1',
       input: inputItems as any,
       text: {
         format: ETHAN_RESPONSE_TEXT_FORMAT,
