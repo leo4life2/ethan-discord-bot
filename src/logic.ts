@@ -295,6 +295,11 @@ export async function handle(
       }
     };
 
+    // DEBUG: Log full input to LLM
+    console.log('\n========== LLM INPUT ==========');
+    console.log(JSON.stringify(inputItems, null, 2));
+    console.log('================================\n');
+
     const stream = await openai.responses.stream({
       model: 'gpt-5.1',
       input: inputItems as any,
@@ -335,6 +340,11 @@ export async function handle(
           if (type === 'response.completed') {
             const finalResponse = event?.response ?? event;
             hasCompleted = true;
+
+            // DEBUG: Log full output from LLM
+            console.log('\n========== LLM OUTPUT ==========');
+            console.log(JSON.stringify(finalResponse, null, 2));
+            console.log('=================================\n');
             let rawText: string | undefined = typeof finalResponse?.output_text === 'string' ? finalResponse.output_text : undefined;
             let structured: EthanResponse | null = null;
             const urlCitations: Array<{ title: string; url: string; start: number; end: number }> = [];
