@@ -141,10 +141,11 @@ export async function handle(
     ],
   });
 
-  // Map historical messages (oldest first)
+  // Map historical messages (oldest first), excluding the latest message to avoid duplication
+  const filteredHistory = history.filter((msg) => msg.id !== messageMeta.id);
   inputItems.push(
     ...(await Promise.all(
-      history.map(async (msg) => {
+      filteredHistory.map(async (msg) => {
         let effectiveContent = msg.content?.trim() || '';
 
         if (!effectiveContent && msg.attachments.size > 0) {
