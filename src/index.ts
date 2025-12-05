@@ -23,6 +23,7 @@ import * as ViewKnowledge from './commands/view-knowledge.js';
 import * as EditKnowledge from './commands/edit-knowledge.js';
 import * as KnowledgeHistory from './commands/knowledge-history.js';
 import * as KnowledgeRollback from './commands/knowledge-rollback.js';
+import { logger } from './logger.js';
 
 const TOKEN = process.env.DISCORD_TOKEN!;
 const ETHAN_CHANNEL_ID = "1266202723448000650"; // talk-to-ethan
@@ -92,7 +93,7 @@ async function registerSlashCommands(readyClient: any) {
     const CLIENT_ID = readyClient.application?.id;
     const GUILD_ID = process.env.DISCORD_GUILD_ID || '1261542082124972193';
     if (!CLIENT_ID) {
-      console.warn('Unable to resolve application id; skipping command registration');
+      logger.warn('Unable to resolve application id; skipping command registration');
       return;
     }
     const commandBodies = [
@@ -108,14 +109,14 @@ async function registerSlashCommands(readyClient: any) {
     ];
     // Always register to the target guild for immediate availability
     await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commandBodies });
-    console.log(`✅ Registered guild commands in ${GUILD_ID}`);
+    logger.info(`Registered guild commands in ${GUILD_ID}`);
   } catch (e) {
-    console.error('Failed to register slash commands:', e);
+    logger.error('Failed to register slash commands', { error: e });
   }
 }
 
 client.once(Events.ClientReady, async (readyClient) => {
-  console.log(`✨ Logged in as ${readyClient.user.tag}`);
+  logger.info(`Logged in as ${readyClient.user.tag}`);
   if (readyClient.user) { // Ensure client.user is available
     startPresenceRotation(readyClient); // Start new presence rotation
   }
@@ -203,7 +204,7 @@ client.on(Events.InteractionCreate, async (interaction: any) => {
       return;
     }
   } catch (err) {
-    console.error('Error handling interaction:', err);
+    logger.error('Error handling interaction', { error: err });
     if (interaction.isRepliable()) {
       try {
         await interaction.reply({ content: 'Command failed.', flags: MessageFlags.Ephemeral });
@@ -254,12 +255,14 @@ client.on(Events.MessageCreate, async (msg) => {
                 // Waveform is now generated inside sendVoiceMessage
                 await sendVoiceMessage(msg.channel.id, speech.filePath, speech.duration, audioFileNameWithExt, finalReply);
                 // Clean up the file after sending
-                await fs.unlink(speech.filePath).catch(console.error);
+                await fs.unlink(speech.filePath).catch((error) => {
+                  logger.error('Failed to delete temp speech file', { error, filePath: speech.filePath });
+                });
               } else {
                 await msg.channel.send(finalReply);
               }
             } catch (err) {
-              console.error("Error generating or sending speech:", err);
+              logger.error("Error generating or sending speech", { error: err });
               // No throw err; here to allow bot to respond with text if speech fails
               await msg.channel.send(finalReply); // Send text if speech fails
             }
@@ -268,9 +271,11 @@ client.on(Events.MessageCreate, async (msg) => {
           }
         }
       } catch (err) {
-        console.error("Error fetching history or handling message:", err);
+        logger.error("Error fetching history or handling message", { error: err });
         // Optionally send a simpler error message if fetching history failed
-        await msg.channel.send("Beep boop... Error processing that.").catch(console.error);
+        await msg.channel.send("Beep boop... Error processing that.").catch((error: any) => {
+          logger.error("Failed to send error message to channel", { error });
+        });
       }
     }
   }

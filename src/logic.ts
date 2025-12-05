@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import { loadPrompt } from './promptStore.js';
 import { loadKnowledge } from './knowledgeStore.js';
 import { openai } from './openaiClient.js';
+import { logger } from './logger.js';
 
 let lastTtsTimestamp = 0;
 
@@ -181,10 +182,11 @@ export async function handle(
               effectiveContent = "[Original message's channel not found or not text-based]";
             }
           } catch (fetchError) {
-            console.error(
-              `Failed to fetch referenced message ${msg.reference.messageId} from channel ${msg.reference.channelId}:`,
-              fetchError
-            );
+            logger.error('Failed to fetch referenced message for reply context', {
+              messageId: msg.reference.messageId,
+              channelId: msg.reference.channelId,
+              error: fetchError,
+            });
             effectiveContent = "[Error loading reply context]";
           }
         }
@@ -267,7 +269,7 @@ export async function handle(
           currentProgressText = initialText;
           sentAnyProgress = true;
         } catch (e) {
-          console.error('Failed to send progress message:', e);
+          logger.error('Failed to send progress message', { error: e });
         } finally {
           progressMessagePromise = null;
         }
@@ -291,14 +293,12 @@ export async function handle(
         await progressMessage.edit(text);
         currentProgressText = text;
       } catch (e) {
-        console.error('Failed to edit progress message:', e);
+        logger.error('Failed to edit progress message', { error: e });
       }
     };
 
     // DEBUG: Log full input to LLM
-    console.log('\n========== LLM INPUT ==========');
-    console.log(JSON.stringify(inputItems, null, 2));
-    console.log('================================\n');
+    logger.debug('LLM input', { input: inputItems });
 
     const stream = await openai.responses.stream({
       model: 'gpt-5.1',
@@ -342,9 +342,7 @@ export async function handle(
             hasCompleted = true;
 
             // DEBUG: Log full output from LLM
-            console.log('\n========== LLM OUTPUT ==========');
-            console.log(JSON.stringify(finalResponse, null, 2));
-            console.log('=================================\n');
+            logger.debug('LLM output', { output: finalResponse });
             let rawText: string | undefined = typeof finalResponse?.output_text === 'string' ? finalResponse.output_text : undefined;
             let structured: EthanResponse | null = null;
             const urlCitations: Array<{ title: string; url: string; start: number; end: number }> = [];
@@ -393,7 +391,7 @@ export async function handle(
             }
 
             if (!structured && (!rawText || typeof rawText !== 'string' || rawText.trim() === '')) {
-              console.warn('OpenAI response content was empty.');
+              logger.warn('OpenAI response content was empty.');
               const fallback = "My brain's a bit fuzzy, what was that?";
               if (!sentAnyProgress) {
                 await textChannel.send(fallback);
@@ -431,7 +429,7 @@ export async function handle(
                   }
                 }
               } catch (e) {
-                console.error('Failed to set final message content:', e);
+                logger.error('Failed to set final message content', { error: e });
               }
             } else {
               const chunks = splitIntoDiscordMessages(finalText || '');
@@ -444,27 +442,27 @@ export async function handle(
             return;
           }
           if (type === 'response.error') {
-            console.error('OpenAI API stream error event:', event);
+            logger.error('OpenAI API stream error event', { event });
             if (!sentAnyProgress) {
               await textChannel.send('Oops, my brain short circuited. Say again?');
             } else if (progressMessage) {
               try {
                 await progressMessage.edit('Oops, my brain short circuited. Say again?');
               } catch (e) {
-                console.error('Failed to set error content on progress message:', e);
+                logger.error('Failed to set error content on progress message', { error: e });
               }
             }
             resolve(undefined);
             return;
           }
         } catch (e) {
-          console.error('Error in stream event handler:', e);
+          logger.error('Error in stream event handler', { error: e });
           resolve(undefined);
         }
       });
     });
   } catch (error) {
-    console.error('OpenAI API error:', error);
+    logger.error('OpenAI API error', { error });
     return {
       text: 'Oops, my brain short circuited. Say again?',
       generateSpeech: false,
@@ -506,7 +504,7 @@ export async function generateSpeech(text: string): Promise<{ filePath: string; 
     
     return { filePath, duration: estimatedDuration };
   } catch (error) {
-    console.error("OpenAI TTS API error:", error);
+    logger.error("OpenAI TTS API error", { error });
     throw error; // Re-throw to be caught by the caller
   }
 }

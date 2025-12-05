@@ -4,6 +4,12 @@ set -Eeuo pipefail
 # Always run from the repo root (the directory of this script)
 cd "$(dirname "$0")"
 
+LOG_LEVEL="info"
+if [[ "${1-}" == "--debug" ]]; then
+  LOG_LEVEL="debug"
+  echo "===> Using debug log level"
+fi
+
 echo "===> Updating repo"
 git fetch origin
 # Ensure main is checked out and exactly matches remote
@@ -26,6 +32,6 @@ SESSION="ethan-discord-bot"
 if tmux has-session -t "$SESSION" 2>/dev/null; then
   tmux kill-session -t "$SESSION"
 fi
-tmux new-session -d -s "$SESSION" "bash -lc 'while true; do node dist/index.js; echo Restarting in 2s...; sleep 2; done'"
+tmux new-session -d -s "$SESSION" "bash -lc 'while true; do LOG_LEVEL=\"$LOG_LEVEL\" node dist/index.js; echo Restarting in 2s...; sleep 2; done'"
 
 echo "===> Deployed commit $(git rev-parse --short HEAD)"
