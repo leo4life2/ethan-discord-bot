@@ -56,7 +56,7 @@ Instructions:
       },
     ],
     reasoning: {
-      effort: 'minimal',
+      effort: 'low',
       summary: 'auto',
     },
     text: {
