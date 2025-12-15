@@ -1,6 +1,7 @@
 import { SlashCommandBuilder, MessageFlags } from 'discord.js';
 import { hasEditorPermission } from '../utils/permissions.js';
 import { listKnowledgeVersions } from '../knowledgeStore.js';
+import { SAFE_ALLOWED_MENTIONS } from '../utils/allowedMentions.js';
 
 const MAX_LINES = 10;
 
@@ -10,15 +11,15 @@ export const data = new SlashCommandBuilder()
 
 export async function execute(interaction: any) {
   if (!interaction.inGuild()) {
-    return interaction.reply({ content: 'Use this in a server.', flags: MessageFlags.Ephemeral });
+    return interaction.reply({ content: 'Use this in a server.', flags: MessageFlags.Ephemeral, allowedMentions: SAFE_ALLOWED_MENTIONS });
   }
   if (!hasEditorPermission(interaction)) {
-    return interaction.reply({ content: 'No permission.', flags: MessageFlags.Ephemeral });
+    return interaction.reply({ content: 'No permission.', flags: MessageFlags.Ephemeral, allowedMentions: SAFE_ALLOWED_MENTIONS });
   }
 
   const versions = await listKnowledgeVersions();
   if (versions.length === 0) {
-    return interaction.reply({ content: 'No knowledge versions found.', flags: MessageFlags.Ephemeral });
+    return interaction.reply({ content: 'No knowledge versions found.', flags: MessageFlags.Ephemeral, allowedMentions: SAFE_ALLOWED_MENTIONS });
   }
 
   const lines = versions.slice(0, MAX_LINES).map((version) => {
@@ -29,6 +30,7 @@ export async function execute(interaction: any) {
   return interaction.reply({
     content: lines.join('\n'),
     flags: MessageFlags.Ephemeral,
+    allowedMentions: SAFE_ALLOWED_MENTIONS,
   });
 }
 

@@ -1,6 +1,7 @@
 import { SlashCommandBuilder, AttachmentBuilder, MessageFlags } from 'discord.js';
 import { hasEditorPermission } from '../utils/permissions.js';
 import { listKnowledgeVersions, getKnowledgeVersionById, loadKnowledgeStore } from '../knowledgeStore.js';
+import { SAFE_ALLOWED_MENTIONS } from '../utils/allowedMentions.js';
 
 export const data = new SlashCommandBuilder()
   .setName('view-knowledge-base')
@@ -14,10 +15,10 @@ export const data = new SlashCommandBuilder()
 
 export async function execute(interaction: any) {
   if (!interaction.inGuild()) {
-    return interaction.reply({ content: 'Use this in a server.', flags: MessageFlags.Ephemeral });
+    return interaction.reply({ content: 'Use this in a server.', flags: MessageFlags.Ephemeral, allowedMentions: SAFE_ALLOWED_MENTIONS });
   }
   if (!hasEditorPermission(interaction)) {
-    return interaction.reply({ content: 'No permission.', flags: MessageFlags.Ephemeral });
+    return interaction.reply({ content: 'No permission.', flags: MessageFlags.Ephemeral, allowedMentions: SAFE_ALLOWED_MENTIONS });
   }
 
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -27,7 +28,7 @@ export async function execute(interaction: any) {
   const version = id ? await getKnowledgeVersionById(id) : store.versions.at(-1) ?? null;
 
   if (!version) {
-    return interaction.editReply('No knowledge base found for that id.');
+    return interaction.editReply({ content: 'No knowledge base found for that id.', allowedMentions: SAFE_ALLOWED_MENTIONS });
   }
 
   const body = JSON.stringify(version.entries, null, 2);
@@ -36,6 +37,7 @@ export async function execute(interaction: any) {
   return interaction.editReply({
     content: `Knowledge base version v${version.id} • ${version.updatedAt} • ${version.updatedBy} — ${version.commitMessage || 'no message'}`,
     files: [attachment],
+    allowedMentions: SAFE_ALLOWED_MENTIONS,
   });
 }
 

@@ -5,6 +5,7 @@ import { loadPrompt } from './promptStore.js';
 import { loadKnowledge } from './knowledgeStore.js';
 import { openai } from './openaiClient.js';
 import { logger } from './logger.js';
+import { SAFE_ALLOWED_MENTIONS } from './utils/allowedMentions.js';
 
 let lastTtsTimestamp = 0;
 
@@ -264,7 +265,10 @@ export async function handle(
       attemptedProgressSend = true; // set BEFORE awaiting to avoid concurrent sends
       progressMessagePromise = (async () => {
         try {
-          const sent = await textChannel.send(initialText);
+          const sent = await textChannel.send({
+            content: initialText,
+            allowedMentions: SAFE_ALLOWED_MENTIONS,
+          });
           progressMessage = sent;
           currentProgressText = initialText;
           sentAnyProgress = true;
@@ -290,7 +294,10 @@ export async function handle(
         if (!progressMessage) return;
       }
       try {
-        await progressMessage.edit(text);
+        await progressMessage.edit({
+          content: text,
+          allowedMentions: SAFE_ALLOWED_MENTIONS,
+        });
         currentProgressText = text;
       } catch (e) {
         logger.error('Failed to edit progress message', { error: e });
@@ -394,7 +401,10 @@ export async function handle(
               logger.warn('OpenAI response content was empty.');
               const fallback = "My brain's a bit fuzzy, what was that?";
               if (!sentAnyProgress) {
-                await textChannel.send(fallback);
+                await textChannel.send({
+                  content: fallback,
+                  allowedMentions: SAFE_ALLOWED_MENTIONS,
+                });
               } else if (progressMessage) {
                 await safeEdit(fallback);
               }
@@ -423,9 +433,15 @@ export async function handle(
               try {
                 const chunks = splitIntoDiscordMessages(finalText || '');
                 if (chunks.length > 0) {
-                  await progressMessage.edit(chunks[0]);
+                  await progressMessage.edit({
+                    content: chunks[0],
+                    allowedMentions: SAFE_ALLOWED_MENTIONS,
+                  });
                   for (let i = 1; i < chunks.length; i++) {
-                    await textChannel.send(chunks[i]);
+                    await textChannel.send({
+                      content: chunks[i],
+                      allowedMentions: SAFE_ALLOWED_MENTIONS,
+                    });
                   }
                 }
               } catch (e) {
@@ -434,7 +450,10 @@ export async function handle(
             } else {
               const chunks = splitIntoDiscordMessages(finalText || '');
               for (const chunk of chunks) {
-                await textChannel.send(chunk);
+                await textChannel.send({
+                  content: chunk,
+                  allowedMentions: SAFE_ALLOWED_MENTIONS,
+                });
               }
             }
 
@@ -444,10 +463,16 @@ export async function handle(
           if (type === 'response.error') {
             logger.error('OpenAI API stream error event', { event });
             if (!sentAnyProgress) {
-              await textChannel.send('Oops, my brain short circuited. Say again?');
+              await textChannel.send({
+                content: 'Oops, my brain short circuited. Say again?',
+                allowedMentions: SAFE_ALLOWED_MENTIONS,
+              });
             } else if (progressMessage) {
               try {
-                await progressMessage.edit('Oops, my brain short circuited. Say again?');
+                await progressMessage.edit({
+                  content: 'Oops, my brain short circuited. Say again?',
+                  allowedMentions: SAFE_ALLOWED_MENTIONS,
+                });
               } catch (e) {
                 logger.error('Failed to set error content on progress message', { error: e });
               }

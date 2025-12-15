@@ -1,6 +1,7 @@
 import { SlashCommandBuilder, MessageFlags } from 'discord.js';
 import { hasEditorPermission } from '../utils/permissions.js';
 import { rollbackKnowledge } from '../knowledgeStore.js';
+import { SAFE_ALLOWED_MENTIONS } from '../utils/allowedMentions.js';
 
 export const data = new SlashCommandBuilder()
   .setName('knowledge-rollback')
@@ -20,10 +21,10 @@ export const data = new SlashCommandBuilder()
 
 export async function execute(interaction: any) {
   if (!interaction.inGuild()) {
-    return interaction.reply({ content: 'Use this in a server.', flags: MessageFlags.Ephemeral });
+    return interaction.reply({ content: 'Use this in a server.', flags: MessageFlags.Ephemeral, allowedMentions: SAFE_ALLOWED_MENTIONS });
   }
   if (!hasEditorPermission(interaction)) {
-    return interaction.reply({ content: 'No permission.', flags: MessageFlags.Ephemeral });
+    return interaction.reply({ content: 'No permission.', flags: MessageFlags.Ephemeral, allowedMentions: SAFE_ALLOWED_MENTIONS });
   }
 
   const id = interaction.options.getInteger('id', true);
@@ -31,10 +32,10 @@ export async function execute(interaction: any) {
 
   const version = await rollbackKnowledge(id, interaction.user.tag, message);
   if (!version) {
-    return interaction.reply({ content: `Version v${id} not found.`, flags: MessageFlags.Ephemeral });
+    return interaction.reply({ content: `Version v${id} not found.`, flags: MessageFlags.Ephemeral, allowedMentions: SAFE_ALLOWED_MENTIONS });
   }
 
-  return interaction.reply({ content: `✅ Rolled back to v${id}. New head is v${version.id}.`, flags: MessageFlags.Ephemeral });
+  return interaction.reply({ content: `✅ Rolled back to v${id}. New head is v${version.id}.`, flags: MessageFlags.Ephemeral, allowedMentions: SAFE_ALLOWED_MENTIONS });
 }
 
 

@@ -1,6 +1,7 @@
 import { SlashCommandBuilder, MessageFlags } from 'discord.js';
 import { EDITOR_ROLE_ID, EDITOR_USER_IDS } from '../config.js';
 import { rollbackToVersion, getVersionById } from '../promptStore.js';
+import { SAFE_ALLOWED_MENTIONS } from '../utils/allowedMentions.js';
 
 function canEdit(interaction: any): boolean {
   if (!interaction.inGuild()) return false;
@@ -15,21 +16,21 @@ export const data = new SlashCommandBuilder()
 
 export async function execute(interaction: any) {
   if (!interaction.inGuild()) {
-    return interaction.reply({ content: 'Use this in a server.', flags: MessageFlags.Ephemeral });
+    return interaction.reply({ content: 'Use this in a server.', flags: MessageFlags.Ephemeral, allowedMentions: SAFE_ALLOWED_MENTIONS });
   }
   if (!canEdit(interaction)) {
-    return interaction.reply({ content: 'No permission.', flags: MessageFlags.Ephemeral });
+    return interaction.reply({ content: 'No permission.', flags: MessageFlags.Ephemeral, allowedMentions: SAFE_ALLOWED_MENTIONS });
   }
   const id = interaction.options.getInteger('id', true);
   const exists = await getVersionById(id);
   if (!exists) {
-    return interaction.reply({ content: `Version v${id} not found.`, flags: MessageFlags.Ephemeral });
+    return interaction.reply({ content: `Version v${id} not found.`, flags: MessageFlags.Ephemeral, allowedMentions: SAFE_ALLOWED_MENTIONS });
   }
   const saved = await rollbackToVersion(id, interaction.user.tag);
   if (!saved) {
-    return interaction.reply({ content: 'Rollback failed.', flags: MessageFlags.Ephemeral });
+    return interaction.reply({ content: 'Rollback failed.', flags: MessageFlags.Ephemeral, allowedMentions: SAFE_ALLOWED_MENTIONS });
   }
-  return interaction.reply({ content: `✅ Rolled back to v${id}. New head is v${saved.id} — ${saved.commitMessage}`, flags: MessageFlags.Ephemeral });
+  return interaction.reply({ content: `✅ Rolled back to v${id}. New head is v${saved.id} — ${saved.commitMessage}`, flags: MessageFlags.Ephemeral, allowedMentions: SAFE_ALLOWED_MENTIONS });
 }
 
 

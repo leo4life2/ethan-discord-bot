@@ -11,6 +11,7 @@ import { hasEditorPermission } from '../utils/permissions.js';
 import { extractLearnedFacts } from '../openaiHelpers.js';
 import { loadKnowledge } from '../knowledgeStore.js';
 import { createLearnSession, type LearnSession } from '../learnSessions.js';
+import { SAFE_ALLOWED_MENTIONS } from '../utils/allowedMentions.js';
 
 const MAX_FETCH = 50;
 const MIN_FETCH = 30;
@@ -59,16 +60,16 @@ async function fetchContext(interaction: ChatInputCommandInteraction) {
 
 export async function execute(interaction: ChatInputCommandInteraction) {
   if (!interaction.inGuild()) {
-    return interaction.reply({ content: 'Use this in a server.', flags: MessageFlags.Ephemeral });
+    return interaction.reply({ content: 'Use this in a server.', flags: MessageFlags.Ephemeral, allowedMentions: SAFE_ALLOWED_MENTIONS });
   }
   if (!hasEditorPermission(interaction)) {
-    return interaction.reply({ content: 'No permission.', flags: MessageFlags.Ephemeral });
+    return interaction.reply({ content: 'No permission.', flags: MessageFlags.Ephemeral, allowedMentions: SAFE_ALLOWED_MENTIONS });
   }
 
   await interaction.deferReply({ ephemeral: true });
   const messages = await fetchContext(interaction);
   if (messages.length === 0) {
-    return interaction.editReply('No messages found to learn from.');
+    return interaction.editReply({ content: 'No messages found to learn from.', allowedMentions: SAFE_ALLOWED_MENTIONS });
   }
 
   const transcript = formatTranscript(messages);
@@ -77,7 +78,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   const candidates = await extractLearnedFacts(transcript, knowledge, focus);
 
   if (candidates.length === 0) {
-    return interaction.editReply('No new facts detected.');
+    return interaction.editReply({ content: 'No new facts detected.', allowedMentions: SAFE_ALLOWED_MENTIONS });
   }
 
   const sessionCandidates = candidates.slice(0, MAX_BUTTON_ROWS);
@@ -116,12 +117,14 @@ export function renderLearnMessage(session: LearnSession) {
       content: header,
       files: [attachment],
       components: rows,
+      allowedMentions: SAFE_ALLOWED_MENTIONS,
     };
   }
 
   return {
     content: `${header}\n\n${list}`,
     components: rows,
+    allowedMentions: SAFE_ALLOWED_MENTIONS,
   };
 }
 

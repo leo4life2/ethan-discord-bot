@@ -24,6 +24,7 @@ import * as EditKnowledge from './commands/edit-knowledge.js';
 import * as KnowledgeHistory from './commands/knowledge-history.js';
 import * as KnowledgeRollback from './commands/knowledge-rollback.js';
 import { logger } from './logger.js';
+import { SAFE_ALLOWED_MENTIONS, RAW_SAFE_ALLOWED_MENTIONS } from './utils/allowedMentions.js';
 
 const TOKEN = process.env.DISCORD_TOKEN!;
 const ETHAN_CHANNEL_ID = "1266202723448000650"; // talk-to-ethan
@@ -78,6 +79,7 @@ async function sendVoiceMessage(channelId: string, filePath: string, seconds: nu
           waveform: waveform, // Use internally generated flat waveform
           title: `Voice message: ${attachmentTitle}`,   // Keep the title field
         }],
+        allowed_mentions: RAW_SAFE_ALLOWED_MENTIONS,
       } }
   );
 }
@@ -141,7 +143,7 @@ client.on(Events.InteractionCreate, async (interaction: any) => {
     if (interaction.isChatInputCommand()) {
       const handler = commands.get(interaction.commandName);
       if (!handler) {
-        return interaction.reply({ content: 'Unknown command.', flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: 'Unknown command.', flags: MessageFlags.Ephemeral, allowedMentions: SAFE_ALLOWED_MENTIONS });
       }
       await handler.execute(interaction);
       return;
@@ -158,12 +160,12 @@ client.on(Events.InteractionCreate, async (interaction: any) => {
 
       const session = getLearnSession(sessionId);
       if (!session) {
-        await interaction.reply({ content: 'Session not found.', flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: 'Session not found.', flags: MessageFlags.Ephemeral, allowedMentions: SAFE_ALLOWED_MENTIONS });
         return;
       }
 
       if (interaction.user.id !== session.initiatorId) {
-        await interaction.reply({ content: 'Only the initiator can approve/reject.', flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: 'Only the initiator can approve/reject.', flags: MessageFlags.Ephemeral, allowedMentions: SAFE_ALLOWED_MENTIONS });
         return;
       }
 
@@ -207,10 +209,10 @@ client.on(Events.InteractionCreate, async (interaction: any) => {
     logger.error('Error handling interaction', { error: err });
     if (interaction.isRepliable()) {
       try {
-        await interaction.reply({ content: 'Command failed.', flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: 'Command failed.', flags: MessageFlags.Ephemeral, allowedMentions: SAFE_ALLOWED_MENTIONS });
       } catch {
         try {
-          await interaction.editReply({ content: 'Command failed.' });
+          await interaction.editReply({ content: 'Command failed.', allowedMentions: SAFE_ALLOWED_MENTIONS });
         } catch {/* ignore */}
       }
     }
@@ -259,21 +261,21 @@ client.on(Events.MessageCreate, async (msg) => {
                   logger.error('Failed to delete temp speech file', { error, filePath: speech.filePath });
                 });
               } else {
-                await msg.channel.send(finalReply);
+                await msg.channel.send({ content: finalReply, allowedMentions: SAFE_ALLOWED_MENTIONS });
               }
             } catch (err) {
               logger.error("Error generating or sending speech", { error: err });
               // No throw err; here to allow bot to respond with text if speech fails
-              await msg.channel.send(finalReply); // Send text if speech fails
+              await msg.channel.send({ content: finalReply, allowedMentions: SAFE_ALLOWED_MENTIONS }); // Send text if speech fails
             }
           } else {
-            await msg.channel.send(finalReply);
+            await msg.channel.send({ content: finalReply, allowedMentions: SAFE_ALLOWED_MENTIONS });
           }
         }
       } catch (err) {
         logger.error("Error fetching history or handling message", { error: err });
         // Optionally send a simpler error message if fetching history failed
-        await msg.channel.send("Beep boop... Error processing that.").catch((error: any) => {
+        await msg.channel.send({ content: "Beep boop... Error processing that.", allowedMentions: SAFE_ALLOWED_MENTIONS }).catch((error: any) => {
           logger.error("Failed to send error message to channel", { error });
         });
       }
