@@ -32,4 +32,3 @@ These steps remove the ability for the bot to trigger `@everyone`/`@here` notice
    - The message should send without pinging (the client shows plain text). If Discord flags a permission error, the deny is in effect.
 
 With these steps plus the `allowed_mentions: none` enforcement in code, the bot is fully least-privileged regarding global mentions.
-

@@ -30,10 +30,9 @@ import * as StartCommand from './commands/start.js';
 import { logger } from './logger.js';
 import { SAFE_ALLOWED_MENTIONS, RAW_SAFE_ALLOWED_MENTIONS } from './utils/allowedMentions.js';
 import { isBotPaused } from './stateStore.js';
+import { ETHAN_CHANNEL_IDS, TARGET_GUILD_IDS } from './config.js';
 
 const TOKEN = process.env.DISCORD_TOKEN!;
-const ETHAN_CHANNEL_ID = "1266202723448000650"; // talk-to-ethan
-
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -188,7 +187,6 @@ async function registerSlashCommands(readyClient: any) {
       await readyClient.application.fetch?.();
     }
     const CLIENT_ID = readyClient.application?.id;
-    const GUILD_ID = process.env.DISCORD_GUILD_ID || '1261542082124972193';
     if (!CLIENT_ID) {
       logger.warn('Unable to resolve application id; skipping command registration');
       return;
@@ -206,9 +204,14 @@ async function registerSlashCommands(readyClient: any) {
       (PauseCommand as any).data.toJSON(),
       (StartCommand as any).data.toJSON(),
     ];
-    // Always register to the target guild for immediate availability
-    await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commandBodies });
-    logger.info(`Registered guild commands in ${GUILD_ID}`);
+    for (const guildId of TARGET_GUILD_IDS) {
+      try {
+        await rest.put(Routes.applicationGuildCommands(CLIENT_ID, guildId), { body: commandBodies });
+        logger.info(`Registered guild commands in ${guildId}`);
+      } catch (guildError) {
+        logger.error('Failed to register slash commands in guild', { guildId, error: guildError });
+      }
+    }
   } catch (e) {
     logger.error('Failed to register slash commands', { error: e });
   }
@@ -332,7 +335,7 @@ client.on(Events.MessageCreate, async (msg) => {
   bumpPendingSilence(msg.channel.id);
 
   const isMentioned = msg.mentions.users.has(client.user.id);
-  const isInEthanChannel = msg.channel.id === ETHAN_CHANNEL_ID;
+  const isInEthanChannel = ETHAN_CHANNEL_IDS.includes(msg.channel.id);
 
   if (!isMentioned && !isInEthanChannel) {
     return;

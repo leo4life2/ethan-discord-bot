@@ -5,10 +5,26 @@ set -Eeuo pipefail
 cd "$(dirname "$0")"
 
 LOG_LEVEL="info"
-if [[ "${1-}" == "--debug" ]]; then
-  LOG_LEVEL="debug"
-  echo "===> Using debug log level"
-fi
+STAGING_MODE="false"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --debug)
+      LOG_LEVEL="debug"
+      echo "===> Using debug log level"
+      shift
+      ;;
+    --staging)
+      STAGING_MODE="true"
+      echo "===> Enabling staging-only mode"
+      shift
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      exit 1
+      ;;
+  esac
+done
 
 echo "===> Updating repo"
 git fetch origin
@@ -29,9 +45,18 @@ fi
 
 echo "===> Restarting app (tmux)"
 SESSION="ethan-discord-bot"
+STAGING_CHANNEL_ID="1450278513021292594"
+STAGING_GUILD_ID="1450277712844423198"
+RUNTIME_EXPORT="LOG_LEVEL=\"$LOG_LEVEL\""
+
+if [[ "$STAGING_MODE" == "true" ]]; then
+  SESSION="ethan-discord-bot-staging"
+  RUNTIME_EXPORT+=" ETHAN_CHANNEL_IDS=\"$STAGING_CHANNEL_ID\" DISCORD_GUILD_IDS=\"$STAGING_GUILD_ID\""
+fi
+
 if tmux has-session -t "$SESSION" 2>/dev/null; then
   tmux kill-session -t "$SESSION"
 fi
-tmux new-session -d -s "$SESSION" "bash -lc 'while true; do LOG_LEVEL=\"$LOG_LEVEL\" node dist/index.js; echo Restarting in 2s...; sleep 2; done'"
+tmux new-session -d -s "$SESSION" "bash -lc 'while true; do $RUNTIME_EXPORT node dist/index.js; echo Restarting in 2s...; sleep 2; done'"
 
 echo "===> Deployed commit $(git rev-parse --short HEAD)"
