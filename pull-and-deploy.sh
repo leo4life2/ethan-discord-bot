@@ -5,7 +5,7 @@ set -Eeuo pipefail
 cd "$(dirname "$0")"
 
 LOG_LEVEL="info"
-STAGING_MODE="false"
+BOT_MODE="all"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -15,7 +15,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --staging)
-      STAGING_MODE="true"
+      BOT_MODE="staging"
       echo "===> Enabling staging-only mode"
       shift
       ;;
@@ -45,13 +45,14 @@ fi
 
 echo "===> Restarting app (tmux)"
 SESSION="ethan-discord-bot"
-STAGING_CHANNEL_ID="1450278513021292594"
-STAGING_GUILD_ID="1450277712844423198"
 RUNTIME_EXPORT="LOG_LEVEL=\"$LOG_LEVEL\""
 
-if [[ "$STAGING_MODE" == "true" ]]; then
+if [[ "$BOT_MODE" != "all" ]]; then
+  RUNTIME_EXPORT+=" BOT_MODE=\"$BOT_MODE\""
+fi
+
+if [[ "$BOT_MODE" == "staging" ]]; then
   SESSION="ethan-discord-bot-staging"
-  RUNTIME_EXPORT+=" ETHAN_CHANNEL_IDS=\"$STAGING_CHANNEL_ID\" DISCORD_GUILD_IDS=\"$STAGING_GUILD_ID\""
 fi
 
 if tmux has-session -t "$SESSION" 2>/dev/null; then

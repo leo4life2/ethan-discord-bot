@@ -17,18 +17,15 @@ Use this when mirroring the production “Ethan” environment in a staging Disc
 
 1. Create the bot’s listening text channel (e.g. `talk-to-ethan`) in staging. Current staging channel ID: **1450278513021292594**.
 2. This ID (plus the prod one) is already hard-coded in `src/config.ts`, so no `.env` changes are required for the default dual-guild deployment.
-3. Only touch `ETHAN_CHANNEL_IDS` via env if you need to override the defaults for a special case.
 
 ## 4. Register slash commands in both guilds
 
-- `src/config.ts` already lists both the production and staging guild IDs, so commands register in both without extra env wiring.
-- If you ever need to limit or expand the list temporarily, you can still override with `DISCORD_GUILD_IDS`, but day-to-day use should rely on the checked-in constants.
+- `src/config.ts` already lists both the production and staging guild IDs, so commands register in both without touching environment variables.
 
 If you need a staging-only process, run `./pull-and-deploy.sh --staging` which:
 
 - Uses tmux session `ethan-discord-bot-staging`
-- Limits `ETHAN_CHANNEL_IDS` to `1450278513021292594`
-- Limits `DISCORD_GUILD_IDS` to `1450277712844423198`
+- Sets `BOT_MODE=staging`, which tells the bot to exclusively use the staging channel and guild constants baked into `src/config.ts`
 
 ## 5. Knowledge/prompt storage
 

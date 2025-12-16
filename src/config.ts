@@ -13,27 +13,54 @@ export const STORE_PATH: string = process.env.PROMPT_STORE_PATH || "./prompt.jso
 export const KNOWLEDGE_PATH: string = process.env.KNOWLEDGE_PATH || "./knowledge.json";
 export const STATE_PATH: string = process.env.STATE_PATH || "./bot-state.json";
 
-const DEFAULT_ETHAN_CHANNEL_IDS = [
+const PROD_ETHAN_CHANNEL_IDS = [
   "1266202723448000650", // production talk-to-ethan
+];
+
+const STAGING_ETHAN_CHANNEL_IDS = [
   "1450278513021292594", // staging talk-to-ethan
 ];
-const DEFAULT_GUILD_IDS = [
+
+const PROD_GUILD_IDS = [
   "1261542082124972193", // production guild
+];
+
+const STAGING_GUILD_IDS = [
   "1450277712844423198", // staging guild
 ];
 
-function parseIdList(value: string | undefined, fallback: string[]): string[] {
-  if (typeof value !== 'string' || value.trim().length === 0) {
-    return [...fallback];
+type BotMode = 'all' | 'prod' | 'staging';
+
+function normalizeMode(raw: string | undefined | null): BotMode {
+  switch ((raw ?? 'all').toLowerCase()) {
+    case 'prod':
+    case 'production':
+      return 'prod';
+    case 'staging':
+      return 'staging';
+    default:
+      return 'all';
   }
-  const ids = value
-    .split(',')
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0);
-  return ids.length > 0 ? ids : [...fallback];
 }
 
-export const ETHAN_CHANNEL_IDS = Object.freeze(parseIdList(process.env.ETHAN_CHANNEL_IDS, DEFAULT_ETHAN_CHANNEL_IDS));
-const rawGuildIds = process.env.DISCORD_GUILD_IDS || process.env.DISCORD_GUILD_ID;
-export const TARGET_GUILD_IDS = Object.freeze(parseIdList(rawGuildIds, DEFAULT_GUILD_IDS));
+function unique(values: string[]): string[] {
+  return Array.from(new Set(values));
+}
+
+function resolveIds(prod: string[], staging: string[], mode: BotMode): string[] {
+  if (mode === 'prod') return unique(prod);
+  if (mode === 'staging') return unique(staging);
+  return unique([...prod, ...staging]);
+}
+
+export const ACTIVE_BOT_MODE: BotMode = normalizeMode(process.env.BOT_MODE);
+export const ETHAN_CHANNEL_IDS = Object.freeze(resolveIds(PROD_ETHAN_CHANNEL_IDS, STAGING_ETHAN_CHANNEL_IDS, ACTIVE_BOT_MODE));
+export const TARGET_GUILD_IDS = Object.freeze(resolveIds(PROD_GUILD_IDS, STAGING_GUILD_IDS, ACTIVE_BOT_MODE));
+
+export function isGuildAllowed(guildId?: string | null): boolean {
+  if (!guildId) {
+    return true; // allow DMs by default
+  }
+  return TARGET_GUILD_IDS.includes(guildId);
+}
 

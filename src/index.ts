@@ -30,7 +30,7 @@ import * as StartCommand from './commands/start.js';
 import { logger } from './logger.js';
 import { SAFE_ALLOWED_MENTIONS, RAW_SAFE_ALLOWED_MENTIONS } from './utils/allowedMentions.js';
 import { isBotPaused } from './stateStore.js';
-import { ETHAN_CHANNEL_IDS, TARGET_GUILD_IDS } from './config.js';
+import { ETHAN_CHANNEL_IDS, TARGET_GUILD_IDS, isGuildAllowed } from './config.js';
 
 const TOKEN = process.env.DISCORD_TOKEN!;
 const client = new Client({
@@ -242,6 +242,10 @@ const commands = new Map<string, { execute: (interaction: any) => Promise<any> }
 
 client.on(Events.InteractionCreate, async (interaction: any) => {
   try {
+    if (!isGuildAllowed(interaction.guildId ?? null)) {
+      return;
+    }
+
     if (interaction.isChatInputCommand()) {
       const handler = commands.get(interaction.commandName);
       if (!handler) {
@@ -333,6 +337,10 @@ client.on(Events.MessageCreate, async (msg) => {
 
   // Any activity in the channel resets the silence timer if a reply is pending
   bumpPendingSilence(msg.channel.id);
+
+  if (!isGuildAllowed(msg.guildId ?? null)) {
+    return;
+  }
 
   const isMentioned = msg.mentions.users.has(client.user.id);
   const isInEthanChannel = ETHAN_CHANNEL_IDS.includes(msg.channel.id);
