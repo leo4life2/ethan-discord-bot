@@ -23,8 +23,11 @@ import * as ViewKnowledge from './commands/view-knowledge.js';
 import * as EditKnowledge from './commands/edit-knowledge.js';
 import * as KnowledgeHistory from './commands/knowledge-history.js';
 import * as KnowledgeRollback from './commands/knowledge-rollback.js';
+import * as PauseCommand from './commands/pause.js';
+import * as StartCommand from './commands/start.js';
 import { logger } from './logger.js';
 import { SAFE_ALLOWED_MENTIONS, RAW_SAFE_ALLOWED_MENTIONS } from './utils/allowedMentions.js';
+import { isBotPaused } from './stateStore.js';
 
 const TOKEN = process.env.DISCORD_TOKEN!;
 const ETHAN_CHANNEL_ID = "1266202723448000650"; // talk-to-ethan
@@ -108,6 +111,8 @@ async function registerSlashCommands(readyClient: any) {
       (EditKnowledge as any).data.toJSON(),
       (KnowledgeHistory as any).data.toJSON(),
       (KnowledgeRollback as any).data.toJSON(),
+      (PauseCommand as any).data.toJSON(),
+      (StartCommand as any).data.toJSON(),
     ];
     // Always register to the target guild for immediate availability
     await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commandBodies });
@@ -136,6 +141,8 @@ const commands = new Map<string, { execute: (interaction: any) => Promise<any> }
   ['edit-knowledge-base', { execute: EditKnowledge.execute }],
   ['show-knowledge-history', { execute: KnowledgeHistory.execute }],
   ['knowledge-rollback', { execute: KnowledgeRollback.execute }],
+  ['pause', { execute: PauseCommand.execute }],
+  ['start', { execute: StartCommand.execute }],
 ]);
 
 client.on(Events.InteractionCreate, async (interaction: any) => {
@@ -234,6 +241,9 @@ client.on(Events.MessageCreate, async (msg) => {
   ) {
     // Process if mentioned OR in the specific channel
     if (isMentioned || isInEthanChannel) {
+      if (await isBotPaused()) {
+        return;
+      }
       try {
         // Fetch last 20 messages for context (excluding the current one initially)
         const historyCollection = await msg.channel.messages.fetch({ limit: 20 });

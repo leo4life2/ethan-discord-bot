@@ -1,4 +1,6 @@
-import { ActivityType, PresenceUpdateStatus, Client, ClientPresence } from 'discord.js';
+import { ActivityType, PresenceUpdateStatus, Client } from 'discord.js';
+import { isBotPaused } from './stateStore.js';
+import { logger } from './logger.js';
 
 // Helper function to get a random number in a range
 const random = (min: number, max: number): number => Math.floor(Math.random() * (max - min + 1)) + min;
@@ -53,30 +55,57 @@ const statusPool: Array<ActivityOption | ActivityGenerator> = [
   }
 ];
 
-export function startPresenceRotation(client: Client) {
-  // Initial set, so it doesn't wait 20 seconds for the first status
-  if (client.user) {
-    const initialPick = statusPool[Math.floor(Math.random() * statusPool.length)];
-    const initialActivity = typeof initialPick === 'function' ? initialPick(client) : initialPick;
-    
-    client.user.setPresence({
-      status: PresenceUpdateStatus.Online,
-      activities: [initialActivity as any],
-    })
+const ROTATION_INTERVAL_MS = 1000 * 60 * 10;
+let rotationTimer: NodeJS.Timeout | null = null;
+let boundClient: Client | null = null;
+
+function chooseActivity(client: Client): ActivityOption {
+  const pick = statusPool[Math.floor(Math.random() * statusPool.length)];
+  return typeof pick === 'function' ? (pick as ActivityGenerator)(client) : pick;
+}
+
+async function applyPresence(client: Client) {
+  if (!client.user) {
+    return;
   }
-  
-  setInterval(() => {
-    if (!client.user) { 
-      console.warn("Client user not available, skipping presence update.");
+  try {
+    const paused = await isBotPaused();
+    if (paused) {
+      await client.user.setPresence({
+        status: PresenceUpdateStatus.Idle,
+        activities: [
+          {
+            name: '⏸️ paused by admins',
+            type: ActivityType.Watching,
+          } as any,
+        ],
+      });
       return;
     }
-
-    const pick = statusPool[Math.floor(Math.random() * statusPool.length)];
-    const activity = typeof pick === 'function' ? pick(client) : pick;
-
-    client.user.setPresence({
+    const activity = chooseActivity(client);
+    await client.user.setPresence({
       status: PresenceUpdateStatus.Online,
       activities: [activity as any],
-    })
-  }, 1000 * 60 * 10);
-} 
+    });
+  } catch (error) {
+    logger.error('Failed to update presence', { error });
+  }
+}
+
+export function startPresenceRotation(client: Client) {
+  boundClient = client;
+  if (rotationTimer) {
+    clearInterval(rotationTimer);
+    rotationTimer = null;
+  }
+  applyPresence(client);
+  rotationTimer = setInterval(() => {
+    applyPresence(client);
+  }, ROTATION_INTERVAL_MS);
+}
+
+export async function refreshPresence(client?: Client) {
+  const target = client ?? boundClient;
+  if (!target) return;
+  await applyPresence(target);
+}
