@@ -5,7 +5,9 @@ import {
   Events,
   ChannelType,
   MessageFlags,
+  Message,
   Routes,
+  Collection,
 } from "discord.js";
 import { handle, generateSpeech } from "./logic.js";
 import { REST } from "@discordjs/rest";
@@ -39,6 +41,15 @@ const client = new Client({
     GatewayIntentBits.MessageContent, // needs the MESSAGE CONTENT privileged intent enabled
   ],
 });
+
+const RESPONSE_SILENCE_MS = 3000;
+type PendingReply = {
+  message: Message;
+  timeout: NodeJS.Timeout;
+  token: number;
+};
+const pendingReplies = new Map<string, PendingReply>();
+let pendingTokenCounter = 0;
 
 const rest = new REST({ version: '10' })
   .setToken(TOKEN);
@@ -85,6 +96,87 @@ async function sendVoiceMessage(channelId: string, filePath: string, seconds: nu
         allowed_mentions: RAW_SAFE_ALLOWED_MENTIONS,
       } }
   );
+}
+
+function createSilenceTimeout(channelId: string, token: number): NodeJS.Timeout {
+  return setTimeout(() => {
+    flushPendingReply(channelId, token).catch((error) => {
+      logger.error('Failed to process pending reply', { channelId, error });
+    });
+  }, RESPONSE_SILENCE_MS);
+}
+
+function scheduleDeferredReply(message: Message) {
+  const channelId = message.channel.id;
+  const token = ++pendingTokenCounter;
+  const existing = pendingReplies.get(channelId);
+  if (existing) {
+    clearTimeout(existing.timeout);
+  }
+  const timeout = createSilenceTimeout(channelId, token);
+  pendingReplies.set(channelId, { message, timeout, token });
+}
+
+function bumpPendingSilence(channelId: string) {
+  const entry = pendingReplies.get(channelId);
+  if (!entry) return;
+  clearTimeout(entry.timeout);
+  entry.timeout = createSilenceTimeout(channelId, entry.token);
+}
+
+async function flushPendingReply(channelId: string, token: number) {
+  const entry = pendingReplies.get(channelId);
+  if (!entry || entry.token !== token) {
+    return;
+  }
+  pendingReplies.delete(channelId);
+  if (await isBotPaused()) {
+    return;
+  }
+  await respondToMessage(entry.message);
+}
+
+async function respondToMessage(latestMessage: Message) {
+  if (!client.user) return;
+  const channel = latestMessage.channel;
+  if (!channel.isTextBased()) {
+    return;
+  }
+  const textChannel = channel as any;
+  try {
+    const historyCollection = await textChannel.messages.fetch({ limit: 20 }) as Collection<string, Message>;
+    const history = Array.from(historyCollection.values()).reverse(); 
+    const response = await handle(latestMessage.content, latestMessage, history, client.user.id);
+    
+    if (response) {
+      const finalReply = response.text.replace(/<@!?\d+>/g, '').trim(); 
+      
+      if (response.generateSpeech) {
+        try {
+          const speech = await generateSpeech(finalReply);
+          if (speech) {
+            const audioFileNameWithExt = `voice_message_${Date.now()}.ogg`;
+            await sendVoiceMessage(textChannel.id, speech.filePath, speech.duration, audioFileNameWithExt, finalReply);
+            await fs.unlink(speech.filePath).catch((error) => {
+              logger.error('Failed to delete temp speech file', { error, filePath: speech.filePath });
+            });
+          } else {
+            await textChannel.send({ content: finalReply, allowedMentions: SAFE_ALLOWED_MENTIONS });
+          }
+        } catch (err) {
+          logger.error("Error generating or sending speech", { error: err });
+          await textChannel.send({ content: finalReply, allowedMentions: SAFE_ALLOWED_MENTIONS });
+        }
+      } else {
+        await textChannel.send({ content: finalReply, allowedMentions: SAFE_ALLOWED_MENTIONS });
+      }
+    }
+  } catch (err) {
+    logger.error("Error fetching history or handling message", { error: err });
+    await textChannel.send({ content: "Beep boop... Error processing that.", allowedMentions: SAFE_ALLOWED_MENTIONS }).catch((error: any) => {
+      logger.error("Failed to send error message to channel", { error });
+    });
+  }
 }
 
 async function registerSlashCommands(readyClient: any) {
@@ -227,70 +319,30 @@ client.on(Events.InteractionCreate, async (interaction: any) => {
 });
 
 client.on(Events.MessageCreate, async (msg) => {
-  // Ignore bots
   if (msg.author.bot || !client.user) return;
 
-  // Check if the bot is mentioned or if the message is in the designated channel
+  const isTextChannel =
+    msg.channel.type === ChannelType.GuildText ||
+    msg.channel.type === ChannelType.DM;
+  if (!isTextChannel) {
+    return;
+  }
+
+  // Any activity in the channel resets the silence timer if a reply is pending
+  bumpPendingSilence(msg.channel.id);
+
   const isMentioned = msg.mentions.users.has(client.user.id);
   const isInEthanChannel = msg.channel.id === ETHAN_CHANNEL_ID;
 
-  // Only proceed if the message is in a GuildText or DM channel
-  if (
-    msg.channel.type === ChannelType.GuildText ||
-    msg.channel.type === ChannelType.DM
-  ) {
-    // Process if mentioned OR in the specific channel
-    if (isMentioned || isInEthanChannel) {
-      if (await isBotPaused()) {
-        return;
-      }
-      try {
-        // Fetch last 20 messages for context (excluding the current one initially)
-        const historyCollection = await msg.channel.messages.fetch({ limit: 20 });
-        // Convert collection to array and reverse to get oldest first
-        const history = Array.from(historyCollection.values()).reverse(); 
-
-        const response = await handle(msg.content, msg, history, client.user.id);
-        
-        if (response) {
-          // Clean up mention if present in reply (optional)
-          const finalReply = response.text.replace(/<@!?\d+>/g, '').trim(); 
-          
-          if (response.generateSpeech) {
-            try {
-              const speech = await generateSpeech(finalReply);
-              if (speech) {
-                // Simplified filename generation
-                const audioFileNameWithExt = `voice_message_${Date.now()}.ogg`;
-
-                // Pass the original finalReply as the attachment title
-                // Waveform is now generated inside sendVoiceMessage
-                await sendVoiceMessage(msg.channel.id, speech.filePath, speech.duration, audioFileNameWithExt, finalReply);
-                // Clean up the file after sending
-                await fs.unlink(speech.filePath).catch((error) => {
-                  logger.error('Failed to delete temp speech file', { error, filePath: speech.filePath });
-                });
-              } else {
-                await msg.channel.send({ content: finalReply, allowedMentions: SAFE_ALLOWED_MENTIONS });
-              }
-            } catch (err) {
-              logger.error("Error generating or sending speech", { error: err });
-              // No throw err; here to allow bot to respond with text if speech fails
-              await msg.channel.send({ content: finalReply, allowedMentions: SAFE_ALLOWED_MENTIONS }); // Send text if speech fails
-            }
-          } else {
-            await msg.channel.send({ content: finalReply, allowedMentions: SAFE_ALLOWED_MENTIONS });
-          }
-        }
-      } catch (err) {
-        logger.error("Error fetching history or handling message", { error: err });
-        // Optionally send a simpler error message if fetching history failed
-        await msg.channel.send({ content: "Beep boop... Error processing that.", allowedMentions: SAFE_ALLOWED_MENTIONS }).catch((error: any) => {
-          logger.error("Failed to send error message to channel", { error });
-        });
-      }
-    }
+  if (!isMentioned && !isInEthanChannel) {
+    return;
   }
+
+  if (await isBotPaused()) {
+    return;
+  }
+
+  scheduleDeferredReply(msg);
 });
 
 // Removed old presence logic and login
