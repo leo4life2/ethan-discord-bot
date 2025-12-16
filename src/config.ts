@@ -1,6 +1,7 @@
 // Configuration for prompt editing and storage
 
-export const EDITOR_ROLE_ID: string = "1274516674586087515"
+const PROD_EDITOR_ROLE_ID = "1274516674586087515";
+const STAGING_EDITOR_ROLE_ID = "1450283341919293480";
 
 // Comma-separated allowlist in env, or leave empty
 export const EDITOR_USER_IDS: string[] = (process.env.EDITOR_USER_IDS || "")
@@ -54,6 +55,8 @@ function resolveIds(prod: string[], staging: string[], mode: BotMode): string[] 
 }
 
 export const ACTIVE_BOT_MODE: BotMode = normalizeMode(process.env.BOT_MODE);
+export const EDITOR_ROLE_ID: string =
+  ACTIVE_BOT_MODE === 'staging' ? STAGING_EDITOR_ROLE_ID : PROD_EDITOR_ROLE_ID;
 export const ETHAN_CHANNEL_IDS = Object.freeze(resolveIds(PROD_ETHAN_CHANNEL_IDS, STAGING_ETHAN_CHANNEL_IDS, ACTIVE_BOT_MODE));
 export const TARGET_GUILD_IDS = Object.freeze(resolveIds(PROD_GUILD_IDS, STAGING_GUILD_IDS, ACTIVE_BOT_MODE));
 
