@@ -31,6 +31,7 @@ import { logger } from './logger.js';
 import { SAFE_ALLOWED_MENTIONS, RAW_SAFE_ALLOWED_MENTIONS } from './utils/allowedMentions.js';
 import { isBotPaused } from './stateStore.js';
 import { ETHAN_CHANNEL_IDS, TARGET_GUILD_IDS, isGuildAllowed } from './config.js';
+import { sanitizeDiscordMentions } from './utils/sanitize.js';
 
 const TOKEN = process.env.DISCORD_TOKEN!;
 const client = new Client({
@@ -148,7 +149,7 @@ async function respondToMessage(latestMessage: Message) {
     const response = await handle(latestMessage.content, latestMessage, history, client.user.id);
     
     if (response) {
-      const finalReply = response.text.replace(/<@!?\d+>/g, '').trim(); 
+          const finalReply = sanitizeDiscordMentions(response.text.replace(/<@!?\d+>/g, '').trim());
       
       if (response.generateSpeech) {
         try {
@@ -337,7 +338,7 @@ client.on(Events.MessageCreate, async (msg) => {
 
   // Any activity in the channel resets the silence timer if a reply is pending
   bumpPendingSilence(msg.channel.id);
-
+        
   if (!isGuildAllowed(msg.guildId ?? null)) {
     return;
   }

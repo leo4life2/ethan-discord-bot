@@ -6,6 +6,7 @@ import { loadKnowledge } from './knowledgeStore.js';
 import { openai } from './openaiClient.js';
 import { logger } from './logger.js';
 import { SAFE_ALLOWED_MENTIONS } from './utils/allowedMentions.js';
+import { sanitizeDiscordMentions } from './utils/sanitize.js';
 
 let lastTtsTimestamp = 0;
 
@@ -416,6 +417,7 @@ export async function handle(
               .replace(/^\s*(\\[Ethan\\]:|Ethan:)\s*/i, '')
               .replace(/^\s*Voice message:\s*/i, '')
               .trim();
+            finalText = sanitizeDiscordMentions(finalText);
 
             // Replace any cite tokens like "citeturn0forecast0" with URL(s)
             // Match ligature-like private-use tokens we observed: "cite..."

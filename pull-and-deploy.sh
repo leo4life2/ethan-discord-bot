@@ -10,8 +10,8 @@ BOT_MODE="all"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --debug)
-      LOG_LEVEL="debug"
-      echo "===> Using debug log level"
+  LOG_LEVEL="debug"
+  echo "===> Using debug log level"
       shift
       ;;
     --staging)
