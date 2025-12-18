@@ -418,6 +418,7 @@ export async function handle(
               .replace(/^\s*Voice message:\s*/i, '')
               .trim();
             finalText = sanitizeDiscordMentions(finalText);
+            const wantsSpeech = Boolean(structured?.generate_speech);
 
             // Replace any cite tokens like "citeturn0forecast0" with URL(s)
             // Match ligature-like private-use tokens we observed: "cite..."
@@ -459,7 +460,10 @@ export async function handle(
               }
             }
 
-            resolve(undefined);
+            // IMPORTANT:
+            // - If speech is requested, return to the caller so downstream voice logic can run.
+            // - If speech is not requested, we already sent the text in Discord here, so return undefined.
+            resolve(wantsSpeech ? { text: finalText, generateSpeech: true } : undefined);
             return;
           }
           if (type === 'response.error') {
