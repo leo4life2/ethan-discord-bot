@@ -47,6 +47,7 @@ type PendingReply = {
   message: Message;
   timeout: NodeJS.Timeout;
   token: number;
+  typingInterval?: NodeJS.Timeout | null;
 };
 const pendingReplies = new Map<string, PendingReply>();
 let pendingTokenCounter = 0;
@@ -98,6 +99,22 @@ async function sendVoiceMessage(channelId: string, filePath: string, seconds: nu
   );
 }
 
+function startTypingLoop(channel: any): NodeJS.Timeout | null {
+  if (!channel || typeof channel.sendTyping !== 'function') return null;
+  // Typing indicator lasts ~10 seconds; refresh a bit sooner.
+  const intervalMs = 8000;
+  // Fire immediately so users see it during the debounce window.
+  channel.sendTyping().catch(() => {});
+  return setInterval(() => {
+    channel.sendTyping().catch(() => {});
+  }, intervalMs);
+}
+
+function stopTypingLoop(interval: NodeJS.Timeout | null | undefined) {
+  if (!interval) return;
+  clearInterval(interval);
+}
+
 function createSilenceTimeout(channelId: string, token: number): NodeJS.Timeout {
   return setTimeout(() => {
     flushPendingReply(channelId, token).catch((error) => {
@@ -114,7 +131,8 @@ function scheduleDeferredReply(message: Message) {
     clearTimeout(existing.timeout);
   }
   const timeout = createSilenceTimeout(channelId, token);
-  pendingReplies.set(channelId, { message, timeout, token });
+  const typingInterval = existing?.typingInterval ?? startTypingLoop(message.channel as any);
+  pendingReplies.set(channelId, { message, timeout, token, typingInterval });
 }
 
 function bumpPendingSilence(channelId: string) {
@@ -130,10 +148,16 @@ async function flushPendingReply(channelId: string, token: number) {
     return;
   }
   pendingReplies.delete(channelId);
+  const typingInterval = entry.typingInterval ?? null;
   if (await isBotPaused()) {
+    stopTypingLoop(typingInterval);
     return;
   }
-  await respondToMessage(entry.message);
+  try {
+    await respondToMessage(entry.message);
+  } finally {
+    stopTypingLoop(typingInterval);
+  }
 }
 
 async function respondToMessage(latestMessage: Message) {
