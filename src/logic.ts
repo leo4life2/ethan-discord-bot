@@ -18,8 +18,8 @@ const ETHAN_RESPONSE_TEXT_FORMAT: any = {
     type: 'object',
     additionalProperties: false,
     properties: {
-      say_in_discord: { type: 'string' },
-      generate_speech: { type: 'boolean' },
+      say_in_discord: { type: 'string', description: 'The text to say in Discord chat. DO NOT include the `[Ethan]:` prefix.' },
+      generate_speech: { type: 'boolean', description: 'Whether to generate speech for the response.' },
     },
     required: ['say_in_discord', 'generate_speech'],
   },

@@ -43,6 +43,15 @@ const client = new Client({
 });
 
 const RESPONSE_SILENCE_MS = 3000;
+
+const CUE_WORDS = ['spoon', 'ethan'] as const;
+
+function messageHasCueWord(content: string): boolean {
+  if (!content) return false;
+  const lower = content.toLowerCase();
+  return CUE_WORDS.some((w) => lower.includes(w));
+}
+
 type PendingReply = {
   message: Message;
   timeout: NodeJS.Timeout;
@@ -370,8 +379,9 @@ client.on(Events.MessageCreate, async (msg) => {
 
   const isMentioned = msg.mentions.users.has(client.user.id);
   const isInEthanChannel = ETHAN_CHANNEL_IDS.includes(msg.channel.id);
+  const hasCueWord = messageHasCueWord(msg.content);
 
-  if (!isMentioned && !isInEthanChannel) {
+  if (!isMentioned && !isInEthanChannel && !hasCueWord) {
     return;
   }
 
