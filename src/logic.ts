@@ -7,6 +7,7 @@ import { openai } from './openaiClient.js';
 import { logger } from './logger.js';
 import { SAFE_ALLOWED_MENTIONS } from './utils/allowedMentions.js';
 import { sanitizeDiscordMentions } from './utils/sanitize.js';
+import { withRetry } from './utils/retry.js';
 
 let lastTtsTimestamp = 0;
 
@@ -308,26 +309,32 @@ export async function handle(
     // DEBUG: Log full input to LLM
     logger.debug('LLM input', { input: inputItems });
 
-    const stream = await openai.responses.stream({
-      model: 'gpt-5.1',
-      input: inputItems as any,
-      text: {
-        format: ETHAN_RESPONSE_TEXT_FORMAT,
-        verbosity: 'medium',
-      },
-      reasoning: {
-        effort: 'low',
-        summary: 'auto',
-      },
-      tools: [
-        {
-          type: 'web_search',
-          user_location: { type: 'approximate', country: 'US' },
-          search_context_size: 'low',
-        } as any,
-      ],
-      store: true,
-    });
+    const stream = await withRetry(
+      () =>
+        Promise.resolve(
+          openai.responses.stream({
+            model: 'gpt-5.1',
+            input: inputItems as any,
+            text: {
+              format: ETHAN_RESPONSE_TEXT_FORMAT,
+              verbosity: 'medium',
+            },
+            reasoning: {
+              effort: 'low',
+              summary: 'auto',
+            },
+            tools: [
+              {
+                type: 'web_search',
+                user_location: { type: 'approximate', country: 'US' },
+                search_context_size: 'low',
+              } as any,
+            ],
+            store: true,
+          }),
+        ),
+      { operation: 'openai.responses.stream (discord reply)' },
+    );
 
     return await new Promise((resolve) => {
       stream.on('event', async (event: any) => {
@@ -514,13 +521,17 @@ export async function generateSpeech(text: string): Promise<{ filePath: string; 
   
   try {
     lastTtsTimestamp = now;
-    const speech = await openai.audio.speech.create({
-      model: "gpt-4o-mini-tts",
-      voice: "ballad",
-      input: text,
-      instructions: "Speak casually, using Gen-Z internet slang with slurred, relaxed pronunciation.",
-      response_format: "opus"
-    });
+    const speech = await withRetry(
+      () =>
+        openai.audio.speech.create({
+          model: "gpt-4o-mini-tts",
+          voice: "ballad",
+          input: text,
+          instructions: "Speak casually, using Gen-Z internet slang with slurred, relaxed pronunciation.",
+          response_format: "opus"
+        }),
+      { operation: 'openai.audio.speech.create (tts)' },
+    );
     
     const fileName = `voice_${now}.ogg`;
     const filePath = path.resolve(process.cwd(), 'temp_audio', fileName);

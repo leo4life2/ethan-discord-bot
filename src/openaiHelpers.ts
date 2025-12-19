@@ -1,5 +1,6 @@
 import { openai } from './openaiClient.js';
 import type { KnowledgeEntry } from './knowledgeStore.js';
+import { withRetry } from './utils/retry.js';
 
 const TEXT_FORMAT: any = {
   type: 'json_schema',
@@ -43,28 +44,32 @@ Instructions:
 - Focus/topic hint from staff: ${focus ?? 'none provided, use your best judgment.'}
 `;
 
-  const response = await openai.responses.create({
-    model: 'gpt-5.1',
-    input: [
-      {
-        role: 'system',
-        content: [{ type: 'input_text', text: 'Respond using the provided JSON schema only.' }],
-      },
-      {
-        role: 'user',
-        content: [{ type: 'input_text', text: prompt }],
-      },
-    ],
-    reasoning: {
-      effort: 'low',
-      summary: 'auto',
-    },
-    text: {
-      format: TEXT_FORMAT,
-      verbosity: 'medium',
-    },
-    metadata: { purpose: 'learn-extraction' },
-  });
+  const response = await withRetry(
+    () =>
+      openai.responses.create({
+        model: 'gpt-5.1',
+        input: [
+          {
+            role: 'system',
+            content: [{ type: 'input_text', text: 'Respond using the provided JSON schema only.' }],
+          },
+          {
+            role: 'user',
+            content: [{ type: 'input_text', text: prompt }],
+          },
+        ],
+        reasoning: {
+          effort: 'low',
+          summary: 'auto',
+        },
+        text: {
+          format: TEXT_FORMAT,
+          verbosity: 'medium',
+        },
+        metadata: { purpose: 'learn-extraction' },
+      }),
+    { operation: 'openai.responses.create (learn-extraction)' },
+  );
 
   const facts: string[] = [];
   const outputs = Array.isArray((response as any).output) ? (response as any).output : [];
