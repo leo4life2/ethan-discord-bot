@@ -42,7 +42,18 @@ ${lines.join('\n')}`;
  * Generate a system prompt with dynamic values.
  */
 async function getSystemPrompt(userName: string): Promise<string> {
-  const currentDate = new Date().toLocaleDateString();
+  const californiaNow = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Los_Angeles',
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    timeZoneName: 'short',
+  }).format(new Date());
+  const currentDate = `current California datetime: ${californiaNow}`;
   const stored = await loadPrompt();
   const base = stored ? (stored.text ?? '') : '';
   const knowledge = await loadKnowledge();
