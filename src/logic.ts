@@ -432,7 +432,9 @@ export async function handle(
             }
 
             let finalText = (structured?.say_in_discord ?? rawText ?? '')
-              .replace(/^\s*(\\[Ethan\\]:|Ethan:)\s*/i, '')
+              // Strip a leading "[Ethan]:" prefix if the model includes it anyway.
+              // Also tolerate minor spacing like "[ Ethan ] :" and remove all whitespace after the colon.
+              .replace(/^\s*(?:\[\s*Ethan\s*\]\s*:|Ethan\s*:)\s*/i, '')
               .replace(/^\s*Voice message:\s*/i, '')
               .trim();
             finalText = sanitizeDiscordMentions(finalText);
