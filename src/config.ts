@@ -15,7 +15,9 @@ export const KNOWLEDGE_PATH: string = process.env.KNOWLEDGE_PATH || "./knowledge
 export const STATE_PATH: string = process.env.STATE_PATH || "./bot-state.json";
 
 const PROD_ETHAN_CHANNEL_IDS = [
-  "1266202723448000650", // production talk-to-ethan
+  "1266202723448000650", // production ask ethan 1
+  "1453363563950248038", // production ask ethan 2
+  "1453363597152358533", // production ask ethan 3
 ];
 
 const STAGING_ETHAN_CHANNEL_IDS = [
