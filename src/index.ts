@@ -56,7 +56,7 @@ type PendingReply = {
   message: Message;
   timeout: NodeJS.Timeout;
   token: number;
-  typingStartTimeout?: NodeJS.Timeout | null;
+  typingRefresher?: { stop: () => void } | null;
 };
 const pendingReplies = new Map<string, PendingReply>();
 let pendingTokenCounter = 0;
@@ -108,21 +108,37 @@ async function sendVoiceMessage(channelId: string, filePath: string, seconds: nu
   );
 }
 
-function scheduleTypingOnce(channel: any): NodeJS.Timeout | null {
-  if (!channel || typeof channel.sendTyping !== 'function') return null;
-  // Delay a bit to avoid flashing typing for very fast replies.
-  const startDelayMs = 350;
+const TYPING_START_DELAY_MS = 350;
+const TYPING_REFRESH_INTERVAL_MS = 8000;
 
+function startTypingRefresher(channel: any): { stop: () => void } | null {
+  if (!channel || typeof channel.sendTyping !== 'function') return null;
+
+  // Keep the typing indicator alive while we wait + generate a reply.
+  // Discord typing indicators expire quickly unless refreshed.
+  let interval: NodeJS.Timeout | null = null;
   const startTimeout = setTimeout(() => {
     channel.sendTyping().catch(() => {});
-  }, startDelayMs);
+    interval = setInterval(() => {
+      channel.sendTyping().catch(() => {});
+    }, TYPING_REFRESH_INTERVAL_MS);
+  }, TYPING_START_DELAY_MS);
 
-  return startTimeout;
+  return {
+    stop: () => {
+      clearTimeout(startTimeout);
+      if (interval) clearInterval(interval);
+    },
+  };
 }
 
-function cancelScheduledTyping(timeout: NodeJS.Timeout | null | undefined) {
-  if (!timeout) return;
-  clearTimeout(timeout);
+function stopTypingRefresher(refresher: { stop: () => void } | null | undefined) {
+  if (!refresher) return;
+  try {
+    refresher.stop();
+  } catch {
+    // ignore
+  }
 }
 
 function createSilenceTimeout(channelId: string, token: number): NodeJS.Timeout {
@@ -141,8 +157,8 @@ function scheduleDeferredReply(message: Message) {
     clearTimeout(existing.timeout);
   }
   const timeout = createSilenceTimeout(channelId, token);
-  const typingStartTimeout = existing?.typingStartTimeout ?? scheduleTypingOnce(message.channel as any);
-  pendingReplies.set(channelId, { message, timeout, token, typingStartTimeout });
+  const typingRefresher = existing?.typingRefresher ?? startTypingRefresher(message.channel as any);
+  pendingReplies.set(channelId, { message, timeout, token, typingRefresher });
 }
 
 function bumpPendingSilence(channelId: string) {
@@ -158,15 +174,15 @@ async function flushPendingReply(channelId: string, token: number) {
     return;
   }
   pendingReplies.delete(channelId);
-  const typingStartTimeout = entry.typingStartTimeout ?? null;
+  const typingRefresher = entry.typingRefresher ?? null;
   if (await isBotPaused()) {
-    cancelScheduledTyping(typingStartTimeout);
+    stopTypingRefresher(typingRefresher);
     return;
   }
   try {
     await respondToMessage(entry.message);
   } finally {
-    cancelScheduledTyping(typingStartTimeout);
+    stopTypingRefresher(typingRefresher);
   }
 }
 
