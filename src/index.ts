@@ -42,7 +42,7 @@ const client = new Client({
   ],
 });
 
-const RESPONSE_SILENCE_MS = 3000;
+const RESPONSE_SILENCE_MS = 6000;
 
 const CUE_WORDS = ['spoon', 'ethan'] as const;
 
