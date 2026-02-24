@@ -19,12 +19,36 @@ const ETHAN_RESPONSE_TEXT_FORMAT: any = {
     type: 'object',
     additionalProperties: false,
     properties: {
-      say_in_discord: { type: 'string', description: 'The text to say in Discord chat. DO NOT include the `[Ethan]:` prefix.' },
-      generate_speech: { type: 'boolean', description: 'Whether to generate speech for the response.' },
+      output_mode: {
+        type: 'string',
+        enum: ['text', 'reaction'],
+        description: 'Use "text" to send a normal reply or "reaction" to only react to the latest message.',
+      },
+      say_in_discord: {
+        type: 'string',
+        description: 'The text to say in Discord chat. Required when output_mode is "text". DO NOT include the `[Ethan]:` prefix.',
+      },
+      reaction_emoji: {
+        type: 'string',
+        description: 'Unicode emoji to react with on the latest message. Required when output_mode is "reaction".',
+      },
+      generate_speech: {
+        type: 'boolean',
+        description: 'Whether to generate speech for the response. Only used when output_mode is "text".',
+      },
     },
-    required: ['say_in_discord', 'generate_speech'],
+    required: ['output_mode'],
   },
 };
+
+const SYSTEM_PROMPT_APPENDIX = [
+  '[System Prompt Appendix]',
+  'Decide whether the latest message is actually directed at Ethan.',
+  'If it is directed at Ethan, output_mode must be "text" and provide say_in_discord.',
+  'If people are mostly talking to each other and not to Ethan, output_mode can be "reaction".',
+  'When output_mode is "reaction", provide reaction_emoji and do not provide a textual reply.',
+  'Prefer simple unicode emoji reactions like 👀, 😂, 😭, 🤝, 🔥, 🙏.',
+].join('\n');
 
 function generateKnowledgeSection(entries: { text: string; added_at: string }[]): string {
   if (!entries.length) return '';
@@ -65,7 +89,9 @@ async function getSystemPrompt(userName: string): Promise<string> {
 
 ${base}`
     : base;
-  return promptWithKnowledge
+  return `${promptWithKnowledge}
+
+${SYSTEM_PROMPT_APPENDIX}`
     .replace('{currentDate}', currentDate)
     .replace('{userName}', userName);
 }
@@ -110,8 +136,10 @@ function splitIntoDiscordMessages(text: string, maxLength = 2000): string[] {
 
 /** Interface for the structured output from OpenAI */
 interface EthanResponse {
-  say_in_discord: string;
-  generate_speech: boolean;
+  output_mode: 'text' | 'reaction';
+  say_in_discord?: string;
+  reaction_emoji?: string;
+  generate_speech?: boolean;
 }
 
 /**
@@ -431,6 +459,34 @@ export async function handle(
               return;
             }
 
+            const outputMode = structured?.output_mode === 'reaction' ? 'reaction' : 'text';
+
+            if (outputMode === 'reaction') {
+              const reactionEmoji = typeof structured?.reaction_emoji === 'string' && structured.reaction_emoji.trim()
+                ? structured.reaction_emoji.trim()
+                : '👀';
+              try {
+                await messageMeta.react(reactionEmoji);
+              } catch (e) {
+                logger.error('Failed to add reaction to latest message', {
+                  error: e,
+                  reactionEmoji,
+                  messageId: messageMeta.id,
+                  channelId: messageMeta.channelId,
+                });
+              }
+
+              if (progressMessage) {
+                try {
+                  await progressMessage.delete();
+                } catch (e) {
+                  logger.error('Failed to delete progress message after reaction mode', { error: e });
+                }
+              }
+              resolve(undefined);
+              return;
+            }
+
             let finalText = (structured?.say_in_discord ?? rawText ?? '')
               // Strip a leading "[Ethan]:" prefix if the model includes it anyway.
               // Also tolerate minor spacing like "[ Ethan ] :" and remove all whitespace after the colon.
@@ -439,6 +495,9 @@ export async function handle(
               .trim();
             finalText = sanitizeDiscordMentions(finalText);
             const wantsSpeech = Boolean(structured?.generate_speech);
+            if (!finalText) {
+              finalText = "My brain's a bit fuzzy, what was that?";
+            }
 
             // Replace any cite tokens like "citeturn0forecast0" with URL(s)
             // Match ligature-like private-use tokens we observed: "cite..."
