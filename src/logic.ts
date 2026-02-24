@@ -37,7 +37,7 @@ const ETHAN_RESPONSE_TEXT_FORMAT: any = {
         description: 'Whether to generate speech for the response. Only used when output_mode is "text".',
       },
     },
-    required: ['output_mode'],
+    required: ['output_mode', 'reaction_emoji', 'say_in_discord', 'generate_speech']
   },
 };
 
