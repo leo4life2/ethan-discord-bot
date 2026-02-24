@@ -511,6 +511,19 @@ export async function handle(
               finalText = finalText.replace(citeTokenRegex, replacement);
             }
 
+            if (wantsSpeech) {
+              // Voice path: return text for TTS but do not post final text in chat.
+              if (progressMessage) {
+                try {
+                  await progressMessage.delete();
+                } catch (e) {
+                  logger.error('Failed to delete progress message before voice response', { error: e });
+                }
+              }
+              resolve({ text: finalText, generateSpeech: true });
+              return;
+            }
+
             if (progressMessage) {
               try {
                 const chunks = splitIntoDiscordMessages(finalText || '');
@@ -542,7 +555,7 @@ export async function handle(
             // IMPORTANT:
             // - If speech is requested, return to the caller so downstream voice logic can run.
             // - If speech is not requested, we already sent the text in Discord here, so return undefined.
-            resolve(wantsSpeech ? { text: finalText, generateSpeech: true } : undefined);
+            resolve(undefined);
             return;
           }
           if (type === 'response.error') {
