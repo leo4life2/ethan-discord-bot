@@ -10,6 +10,8 @@ import { sanitizeDiscordMentions } from './utils/sanitize.js';
 import { withRetry } from './utils/retry.js';
 
 let lastTtsTimestamp = 0;
+const MAX_REACTIONS_PER_MESSAGE = 5;
+const MAX_REACTION_USERS_PER_EMOJI = 6;
 
 const ETHAN_RESPONSE_TEXT_FORMAT: any = {
   type: 'json_schema',
@@ -132,6 +134,54 @@ function splitIntoDiscordMessages(text: string, maxLength = 2000): string[] {
   return chunks;
 }
 
+function formatReactionEmoji(reaction: any): string {
+  const emoji = reaction?.emoji;
+  if (emoji && typeof emoji.toString === 'function') {
+    return emoji.toString();
+  }
+  if (emoji?.name) {
+    return String(emoji.name);
+  }
+  return 'unknown_emoji';
+}
+
+async function buildReactionSummary(message: Message): Promise<string> {
+  const reactions = Array.from(message.reactions.cache.values());
+  if (reactions.length === 0) return '';
+
+  const selectedReactions = reactions.slice(0, MAX_REACTIONS_PER_MESSAGE);
+  const summaryParts: string[] = [];
+
+  for (const reaction of selectedReactions) {
+    const emoji = formatReactionEmoji(reaction);
+    let users: string[] = [];
+    try {
+      const fetchedUsers = await reaction.users.fetch({ limit: MAX_REACTION_USERS_PER_EMOJI });
+      users = Array.from(fetchedUsers.values()).map((user) => user.username);
+    } catch (error) {
+      logger.warn('Failed to fetch reaction users for context', {
+        error,
+        messageId: message.id,
+        emoji,
+      });
+      users = Array.from(reaction.users.cache.values()).map((user) => user.username);
+    }
+
+    users = Array.from(new Set(users)).slice(0, MAX_REACTION_USERS_PER_EMOJI);
+    const usersText = users.length > 0 ? users.join(', ') : 'unknown users';
+    const count = typeof reaction.count === 'number' ? reaction.count : users.length;
+    const moreUsers = count > users.length ? ` (+${count - users.length} more)` : '';
+    summaryParts.push(`${emoji} x${count} by ${usersText}${moreUsers}`);
+  }
+
+  const extraReactionTypes = reactions.length - selectedReactions.length;
+  const extraSuffix = extraReactionTypes > 0
+    ? `; +${extraReactionTypes} more reaction types`
+    : '';
+
+  return `[Reactions: ${summaryParts.join(' | ')}${extraSuffix}]`;
+}
+
 // Using Responses API; message parts will be constructed inline as needed
 
 /** Interface for the structured output from OpenAI */
@@ -232,6 +282,12 @@ export async function handle(
             effectiveContent = "[Error loading reply context]";
           }
         }
+        const reactionSummary = await buildReactionSummary(msg);
+        if (reactionSummary) {
+          effectiveContent = effectiveContent
+            ? `${effectiveContent}\n${reactionSummary}`
+            : reactionSummary;
+        }
 
         const role = msg.author.id === botId ? 'assistant' : 'user';
         const partType = role === 'assistant' ? 'output_text' : 'input_text';
@@ -265,8 +321,12 @@ export async function handle(
   );
 
   // Add the latest message with any images attached
+  const latestReactionSummary = await buildReactionSummary(messageMeta);
+  const latestText = latestReactionSummary
+    ? `[${messageMeta.author.username}]: ${latestMessage || '<no message>'}\n${latestReactionSummary}`
+    : `[${messageMeta.author.username}]: ${latestMessage || '<no message>'}`;
   const latestContentParts: Array<any> = [
-    { type: 'input_text', text: `[${messageMeta.author.username}]: ${latestMessage || '<no message>'}` },
+    { type: 'input_text', text: latestText },
   ];
 
   if (messageMeta.attachments.size > 0) {
