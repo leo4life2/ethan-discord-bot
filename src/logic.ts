@@ -55,8 +55,7 @@ const SYSTEM_PROMPT_APPENDIX = [
   'At least one action must be true: should_send_text_message, should_react, or generate_speech.',
   'Always include all schema fields.',
   'If should_send_text_message is true or generate_speech is true, provide say_in_discord; otherwise set say_in_discord to an empty string.',
-  'If should_react is true, provide reaction_emoji; otherwise set reaction_emoji to an empty string.',
-  'Prefer simple unicode emoji reactions like 👀, 😂, 😭, 🤝, 🔥, 🙏.',
+  'If should_react is true, provide reaction_emoji; otherwise set reaction_emoji to an empty string.'
 ].join('\n');
 
 function generateKnowledgeSection(entries: { text: string; added_at: string }[]): string {
