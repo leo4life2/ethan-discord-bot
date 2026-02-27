@@ -48,7 +48,9 @@ const ETHAN_RESPONSE_TEXT_FORMAT: any = {
 
 const SYSTEM_PROMPT_APPENDIX = [
   '[System Prompt Appendix]',
-  'Decide whether the latest message is actually directed at Ethan.',
+  'Be proactive and engage frequently in chat.',
+  'Lean toward responding rather than staying silent.',
+  'Use lightweight reactions often when they fit the vibe.',
   'You can choose any combination of actions: text message, reaction, and voice.',
   'At least one action must be true: should_send_text_message, should_react, or generate_speech.',
   'Always include all schema fields.',
