@@ -105,27 +105,24 @@ export function registerMessageHandler(client: Client, rest: REST): void {
       const history = Array.from(historyCollection.values()).reverse();
       const response = await handle(latestMessage.content, latestMessage, history, client.user.id);
 
-      if (response) {
+      if (response?.generateSpeech) {
         const finalReply = sanitizeDiscordMentions(response.text.replace(/<@!?\d+>/g, '').trim());
-
-        if (response.generateSpeech) {
-          try {
-            const speech = await generateSpeech(finalReply);
-            if (speech) {
-              const audioFileNameWithExt = `voice_message_${Date.now()}.ogg`;
-              await sendVoiceMessage(rest, textChannel.id, speech.filePath, speech.duration, audioFileNameWithExt, finalReply);
-              await fs.unlink(speech.filePath).catch((error) => {
-                logger.error('Failed to delete temp speech file', { error, filePath: speech.filePath });
-              });
-            } else {
-              await textChannel.send({ content: finalReply, allowedMentions: SAFE_ALLOWED_MENTIONS });
-            }
-          } catch (err) {
-            logger.error('Error generating or sending speech', { error: err });
+        try {
+          const speech = await generateSpeech(finalReply);
+          if (speech) {
+            const audioFileNameWithExt = `voice_message_${Date.now()}.ogg`;
+            await sendVoiceMessage(rest, textChannel.id, speech.filePath, speech.duration, audioFileNameWithExt, finalReply);
+            await fs.unlink(speech.filePath).catch((error) => {
+              logger.error('Failed to delete temp speech file', { error, filePath: speech.filePath });
+            });
+          } else if (response.shouldSendTextMessage && !response.textAlreadySent) {
             await textChannel.send({ content: finalReply, allowedMentions: SAFE_ALLOWED_MENTIONS });
           }
-        } else {
-          await textChannel.send({ content: finalReply, allowedMentions: SAFE_ALLOWED_MENTIONS });
+        } catch (err) {
+          logger.error('Error generating or sending speech', { error: err });
+          if (response.shouldSendTextMessage && !response.textAlreadySent) {
+            await textChannel.send({ content: finalReply, allowedMentions: SAFE_ALLOWED_MENTIONS });
+          }
         }
       }
     } catch (err) {

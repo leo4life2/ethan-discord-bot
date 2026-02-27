@@ -21,34 +21,39 @@ const ETHAN_RESPONSE_TEXT_FORMAT: any = {
     type: 'object',
     additionalProperties: false,
     properties: {
-      output_mode: {
-        type: 'string',
-        enum: ['text', 'reaction'],
-        description: 'Use "text" to send a normal reply or "reaction" to only react to the latest message.',
+      should_send_text_message: {
+        type: 'boolean',
+        description: 'Whether Ethan should send a text message to the channel.',
       },
-      say_in_discord: {
-        type: 'string',
-        description: 'The text to say in Discord chat. Required when output_mode is "text". DO NOT include the `[Ethan]:` prefix.',
-      },
-      reaction_emoji: {
-        type: 'string',
-        description: 'Unicode emoji to react with on the latest message. Required when output_mode is "reaction".',
+      should_react: {
+        type: 'boolean',
+        description: 'Whether Ethan should react to the latest message.',
       },
       generate_speech: {
         type: 'boolean',
-        description: 'Whether to generate speech for the response. Only used when output_mode is "text".',
+        description: 'Whether Ethan should generate and send a voice message.',
+      },
+      say_in_discord: {
+        type: 'string',
+        description: 'Text content for message and/or speech. If not sending text or speech, return an empty string. DO NOT include the `[Ethan]:` prefix.',
+      },
+      reaction_emoji: {
+        type: 'string',
+        description: 'Unicode emoji to react with on the latest message. If not reacting, return an empty string.',
       },
     },
-    required: ['output_mode', 'reaction_emoji', 'say_in_discord', 'generate_speech']
+    required: ['should_send_text_message', 'should_react', 'generate_speech', 'say_in_discord', 'reaction_emoji'],
   },
 };
 
 const SYSTEM_PROMPT_APPENDIX = [
   '[System Prompt Appendix]',
   'Decide whether the latest message is actually directed at Ethan.',
-  'If it is directed at Ethan, output_mode must be "text" and provide say_in_discord.',
-  'If people are mostly talking to each other and not to Ethan, output_mode can be "reaction".',
-  'When output_mode is "reaction", provide reaction_emoji and do not provide a textual reply.',
+  'You can choose any combination of actions: text message, reaction, and voice.',
+  'At least one action must be true: should_send_text_message, should_react, or generate_speech.',
+  'Always include all schema fields.',
+  'If should_send_text_message is true or generate_speech is true, provide say_in_discord; otherwise set say_in_discord to an empty string.',
+  'If should_react is true, provide reaction_emoji; otherwise set reaction_emoji to an empty string.',
   'Prefer simple unicode emoji reactions like 👀, 😂, 😭, 🤝, 🔥, 🙏.',
 ].join('\n');
 
@@ -186,10 +191,18 @@ async function buildReactionSummary(message: Message): Promise<string> {
 
 /** Interface for the structured output from OpenAI */
 interface EthanResponse {
-  output_mode: 'text' | 'reaction';
+  should_send_text_message?: boolean;
+  should_react?: boolean;
+  generate_speech?: boolean;
   say_in_discord?: string;
   reaction_emoji?: string;
-  generate_speech?: boolean;
+}
+
+export interface HandleSpeechDirective {
+  text: string;
+  generateSpeech: true;
+  shouldSendTextMessage: boolean;
+  textAlreadySent: boolean;
 }
 
 /**
@@ -205,15 +218,12 @@ export async function handle(
   messageMeta: Message,
   history: Message[],
   botId: string
-): Promise<{ text: string; generateSpeech: boolean } | undefined> {
+): Promise<HandleSpeechDirective | undefined> {
   const systemPrompt = await getSystemPrompt(messageMeta.author.username);
   // Narrow channel to one that supports send(); avoid version-specific typings
   const channel = messageMeta.channel as any;
   if (!channel || typeof channel.send !== 'function') {
-    return {
-      text: "i can only reply in text channels, sorry!",
-      generateSpeech: false,
-    };
+    return undefined;
   }
   const textChannel: any = channel;
 
@@ -519,9 +529,16 @@ export async function handle(
               return;
             }
 
-            const outputMode = structured?.output_mode === 'reaction' ? 'reaction' : 'text';
+            let shouldSendText = Boolean(structured?.should_send_text_message);
+            let shouldReact = Boolean(structured?.should_react);
+            const wantsSpeech = Boolean(structured?.generate_speech);
 
-            if (outputMode === 'reaction') {
+            // Enforce at least one action if the model returns none.
+            if (!shouldSendText && !shouldReact && !wantsSpeech) {
+              shouldReact = true;
+            }
+
+            if (shouldReact) {
               const reactionEmoji = typeof structured?.reaction_emoji === 'string' && structured.reaction_emoji.trim()
                 ? structured.reaction_emoji.trim()
                 : '👀';
@@ -535,86 +552,102 @@ export async function handle(
                   channelId: messageMeta.channelId,
                 });
               }
+            }
 
+            const needsTextPayload = shouldSendText || wantsSpeech;
+            let finalText = '';
+            if (needsTextPayload) {
+              finalText = (structured?.say_in_discord ?? rawText ?? '')
+                // Strip a leading "[Ethan]:" prefix if the model includes it anyway.
+                // Also tolerate minor spacing like "[ Ethan ] :" and remove all whitespace after the colon.
+                .replace(/^\s*(?:\[\s*Ethan\s*\]\s*:|Ethan\s*:)\s*/i, '')
+                .replace(/^\s*Voice message:\s*/i, '')
+                .trim();
+              finalText = sanitizeDiscordMentions(finalText);
+              if (!finalText) {
+                finalText = "My brain's a bit fuzzy, what was that?";
+              }
+
+              // Replace any cite tokens like "citeturn0forecast0" with URL(s)
+              // Match ligature-like private-use tokens we observed: "cite..."
+              const citeTokenRegex = /cite[^]+/g;
+              if (citeTokenRegex.test(finalText)) {
+                const uniqueUrls = Array.from(new Set(urlCitations.map(c => c.url)));
+                const replacement = uniqueUrls.length > 0
+                  ? (uniqueUrls.length === 1 ? ` (${uniqueUrls[0]})` : ` (${uniqueUrls.join(', ')})`)
+                  : '';
+                finalText = finalText.replace(citeTokenRegex, replacement);
+              }
+            }
+
+            let textAlreadySent = false;
+            if (shouldSendText) {
               if (progressMessage) {
                 try {
-                  await progressMessage.delete();
+                  const chunks = splitIntoDiscordMessages(finalText || '');
+                  if (chunks.length > 0) {
+                    await progressMessage.edit({
+                      content: chunks[0],
+                      allowedMentions: SAFE_ALLOWED_MENTIONS,
+                    });
+                    for (let i = 1; i < chunks.length; i++) {
+                      await textChannel.send({
+                        content: chunks[i],
+                        allowedMentions: SAFE_ALLOWED_MENTIONS,
+                      });
+                    }
+                  }
+                  textAlreadySent = true;
                 } catch (e) {
-                  logger.error('Failed to delete progress message after reaction mode', { error: e });
+                  logger.error('Failed to set final message content', { error: e });
+                  try {
+                    const chunks = splitIntoDiscordMessages(finalText || '');
+                    for (const chunk of chunks) {
+                      await textChannel.send({
+                        content: chunk,
+                        allowedMentions: SAFE_ALLOWED_MENTIONS,
+                      });
+                    }
+                    textAlreadySent = true;
+                  } catch (sendFallbackError) {
+                    logger.error('Failed to send text fallback after edit failure', { error: sendFallbackError });
+                  }
                 }
+              } else {
+                const chunks = splitIntoDiscordMessages(finalText || '');
+                for (const chunk of chunks) {
+                  await textChannel.send({
+                    content: chunk,
+                    allowedMentions: SAFE_ALLOWED_MENTIONS,
+                  });
+                }
+                textAlreadySent = true;
               }
-              resolve(undefined);
-              return;
-            }
-
-            let finalText = (structured?.say_in_discord ?? rawText ?? '')
-              // Strip a leading "[Ethan]:" prefix if the model includes it anyway.
-              // Also tolerate minor spacing like "[ Ethan ] :" and remove all whitespace after the colon.
-              .replace(/^\s*(?:\[\s*Ethan\s*\]\s*:|Ethan\s*:)\s*/i, '')
-              .replace(/^\s*Voice message:\s*/i, '')
-              .trim();
-            finalText = sanitizeDiscordMentions(finalText);
-            const wantsSpeech = Boolean(structured?.generate_speech);
-            if (!finalText) {
-              finalText = "My brain's a bit fuzzy, what was that?";
-            }
-
-            // Replace any cite tokens like "citeturn0forecast0" with URL(s)
-            // Match ligature-like private-use tokens we observed: "cite..."
-            // Build regex by embedding the specific chars directly to avoid escaping issues
-            const citeTokenRegex = /cite[^]+/g;
-            if (citeTokenRegex.test(finalText)) {
-              const uniqueUrls = Array.from(new Set(urlCitations.map(c => c.url)));
-              const replacement = uniqueUrls.length > 0
-                ? (uniqueUrls.length === 1 ? ` (${uniqueUrls[0]})` : ` (${uniqueUrls.join(', ')})`)
-                : '';
-              finalText = finalText.replace(citeTokenRegex, replacement);
+            } else if (progressMessage && !wantsSpeech) {
+              try {
+                await progressMessage.delete();
+              } catch (e) {
+                logger.error('Failed to delete progress message after non-text response', { error: e });
+              }
             }
 
             if (wantsSpeech) {
-              // Voice path: return text for TTS but do not post final text in chat.
-              if (progressMessage) {
+              if (progressMessage && !textAlreadySent) {
                 try {
                   await progressMessage.delete();
                 } catch (e) {
                   logger.error('Failed to delete progress message before voice response', { error: e });
                 }
               }
-              resolve({ text: finalText, generateSpeech: true });
+              resolve({
+                text: finalText,
+                generateSpeech: true,
+                shouldSendTextMessage: shouldSendText,
+                textAlreadySent,
+              });
               return;
             }
 
-            if (progressMessage) {
-              try {
-                const chunks = splitIntoDiscordMessages(finalText || '');
-                if (chunks.length > 0) {
-                  await progressMessage.edit({
-                    content: chunks[0],
-                    allowedMentions: SAFE_ALLOWED_MENTIONS,
-                  });
-                  for (let i = 1; i < chunks.length; i++) {
-                    await textChannel.send({
-                      content: chunks[i],
-                      allowedMentions: SAFE_ALLOWED_MENTIONS,
-                    });
-                  }
-                }
-              } catch (e) {
-                logger.error('Failed to set final message content', { error: e });
-              }
-            } else {
-              const chunks = splitIntoDiscordMessages(finalText || '');
-              for (const chunk of chunks) {
-                await textChannel.send({
-                  content: chunk,
-                  allowedMentions: SAFE_ALLOWED_MENTIONS,
-                });
-              }
-            }
-
-            // IMPORTANT:
-            // - If speech is requested, return to the caller so downstream voice logic can run.
-            // - If speech is not requested, we already sent the text in Discord here, so return undefined.
             resolve(undefined);
             return;
           }
@@ -646,10 +679,13 @@ export async function handle(
     });
   } catch (error) {
     logger.error('OpenAI API error', { error });
-    return {
-      text: 'Oops, my brain short circuited. Say again?',
-      generateSpeech: false,
-    }; // Inform user
+    await textChannel.send({
+      content: 'Oops, my brain short circuited. Say again?',
+      allowedMentions: SAFE_ALLOWED_MENTIONS,
+    }).catch((sendError: any) => {
+      logger.error('Failed to send API error message', { error: sendError });
+    });
+    return undefined;
   }
 }
 
