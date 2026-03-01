@@ -156,7 +156,8 @@ export function registerMessageHandler(client: Client, rest: REST): void {
 
     const isTextChannel =
       msg.channel.type === ChannelType.GuildText ||
-      msg.channel.type === ChannelType.DM;
+      msg.channel.type === ChannelType.DM ||
+      msg.channel.isThread();
     if (!isTextChannel) {
       return;
     }
@@ -169,7 +170,10 @@ export function registerMessageHandler(client: Client, rest: REST): void {
     }
 
     const isMentioned = msg.mentions.users.has(client.user.id);
-    const isInEthanChannel = ETHAN_CHANNEL_IDS.includes(msg.channel.id);
+    const parentChannelId = msg.channel.isThread() ? msg.channel.parentId : null;
+    const isInEthanChannel =
+      ETHAN_CHANNEL_IDS.includes(msg.channel.id) ||
+      (parentChannelId ? ETHAN_CHANNEL_IDS.includes(parentChannelId) : false);
     const hasCueWord = messageHasCueWord(msg.content);
 
     if (!isMentioned && !isInEthanChannel && !hasCueWord) {
