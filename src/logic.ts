@@ -423,7 +423,7 @@ export async function handle(
       () =>
         Promise.resolve(
           openai.responses.stream({
-            model: 'gpt-5.1',
+            model: 'gpt-5.3-chat-latest',
             input: inputItems as any,
             text: {
               format: ETHAN_RESPONSE_TEXT_FORMAT,

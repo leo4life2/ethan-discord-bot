@@ -47,7 +47,7 @@ Instructions:
   const response = await withRetry(
     () =>
       openai.responses.create({
-        model: 'gpt-5.1',
+        model: 'gpt-5.3-chat-latest',
         input: [
           {
             role: 'system',
