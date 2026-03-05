@@ -15,9 +15,9 @@ import { ETHAN_CHANNEL_IDS, isGuildAllowed } from '../config.js';
 import { sanitizeDiscordMentions } from '../utils/sanitize.js';
 import { sendVoiceMessage } from './voiceMessage.js';
 
-const RESPONSE_SILENCE_MS = 4000;
+const RESPONSE_SILENCE_MS = 6000;
 const CUE_WORDS = ['spoon', 'ethan'] as const;
-const TYPING_START_DELAY_MS = 350;
+const TYPING_START_DELAY_MS = 100;
 const TYPING_REFRESH_INTERVAL_MS = 8000;
 
 type PendingReply = {
