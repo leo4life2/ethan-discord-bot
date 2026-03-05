@@ -430,7 +430,7 @@ export async function handle(
               verbosity: 'medium',
             },
             reasoning: {
-              effort: 'medium',
+              effort: 'low',
               summary: 'auto',
             },
             tools: [
