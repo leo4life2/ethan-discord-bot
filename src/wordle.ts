@@ -286,6 +286,14 @@ function wordleChannelIdFor(message: Message): string {
   return message.channel.id;
 }
 
+export async function shouldHandleWordleMessage(message: Message): Promise<boolean> {
+  const wordleChannelId = wordleChannelIdFor(message);
+  const now = getPacificNow();
+  const state = await readState();
+  const challenge = state.channels[wordleChannelId];
+  return !(challenge?.localDate === now.dateKey && challenge.solvedAt);
+}
+
 export async function handleWordleMessage(message: Message): Promise<void> {
   const channel = message.channel as any;
   if (!channel || typeof channel.send !== 'function') {
@@ -297,14 +305,6 @@ export async function handleWordleMessage(message: Message): Promise<void> {
   if (!challenge) {
     await message.reply({
       content: 'Today\'s puzzle starts at 8:00 AM Pacific.',
-      allowedMentions: SAFE_ALLOWED_MENTIONS,
-    });
-    return;
-  }
-
-  if (challenge.solvedAt) {
-    await message.reply({
-      content: solvedText(challenge),
       allowedMentions: SAFE_ALLOWED_MENTIONS,
     });
     return;
