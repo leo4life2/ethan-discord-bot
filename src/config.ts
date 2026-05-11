@@ -13,16 +13,22 @@ export const EDITOR_USER_IDS: string[] = (process.env.EDITOR_USER_IDS || "")
 export const STORE_PATH: string = process.env.PROMPT_STORE_PATH || "./prompt.json";
 export const KNOWLEDGE_PATH: string = process.env.KNOWLEDGE_PATH || "./knowledge.json";
 export const STATE_PATH: string = process.env.STATE_PATH || "./bot-state.json";
+export const WORDLE_STATE_PATH: string = process.env.WORDLE_STATE_PATH || "./wordle-state.json";
 
 const PROD_ETHAN_CHANNEL_IDS = [
   "1266202723448000650", // production ask ethan 1
   "1453363563950248038", // production ask ethan 2
-  "1453363597152358533", // production ask ethan 3
 ];
 
 const STAGING_ETHAN_CHANNEL_IDS = [
   "1450278513021292594", // staging talk-to-ethan
 ];
+
+const PROD_WORDLE_CHANNEL_IDS = [
+  "1453363597152358533", // production Wordle with Ethan
+];
+
+const STAGING_WORDLE_CHANNEL_IDS: string[] = [];
 
 const PROD_GUILD_IDS = [
   "1261542082124972193", // production guild
@@ -60,6 +66,7 @@ export const ACTIVE_BOT_MODE: BotMode = normalizeMode(process.env.BOT_MODE);
 export const EDITOR_ROLE_ID: string =
   ACTIVE_BOT_MODE === 'staging' ? STAGING_EDITOR_ROLE_ID : PROD_EDITOR_ROLE_ID;
 export const ETHAN_CHANNEL_IDS = Object.freeze(resolveIds(PROD_ETHAN_CHANNEL_IDS, STAGING_ETHAN_CHANNEL_IDS, ACTIVE_BOT_MODE));
+export const WORDLE_CHANNEL_IDS = Object.freeze(resolveIds(PROD_WORDLE_CHANNEL_IDS, STAGING_WORDLE_CHANNEL_IDS, ACTIVE_BOT_MODE));
 export const TARGET_GUILD_IDS = Object.freeze(resolveIds(PROD_GUILD_IDS, STAGING_GUILD_IDS, ACTIVE_BOT_MODE));
 
 export function isGuildAllowed(guildId?: string | null): boolean {
@@ -68,4 +75,3 @@ export function isGuildAllowed(guildId?: string | null): boolean {
   }
   return TARGET_GUILD_IDS.includes(guildId);
 }
-

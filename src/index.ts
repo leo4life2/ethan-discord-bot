@@ -10,6 +10,7 @@ import { logger } from './logger.js';
 import { registerSlashCommands } from './handlers/registerSlashCommands.js';
 import { registerInteractionHandler } from './handlers/interactionHandler.js';
 import { registerMessageHandler } from './handlers/messageHandler.js';
+import { startWordleScheduler } from './wordle.js';
 
 const TOKEN = process.env.DISCORD_TOKEN!;
 const client = new Client({
@@ -28,6 +29,7 @@ client.once(Events.ClientReady, async (readyClient) => {
   if (readyClient.user) {
     startPresenceRotation(readyClient);
   }
+  startWordleScheduler(readyClient);
   await registerSlashCommands(readyClient, rest);
 });
 

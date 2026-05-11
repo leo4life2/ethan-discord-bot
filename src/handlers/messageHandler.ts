@@ -14,6 +14,7 @@ import { isBotPaused } from '../stateStore.js';
 import { ETHAN_CHANNEL_IDS, isGuildAllowed } from '../config.js';
 import { sanitizeDiscordMentions } from '../utils/sanitize.js';
 import { sendVoiceMessage } from './voiceMessage.js';
+import { handleWordleMessage, isWordleChannel } from '../wordle.js';
 
 const RESPONSE_SILENCE_MS = 6000;
 const CUE_WORDS = ['spoon', 'ethan'] as const;
@@ -169,18 +170,24 @@ export function registerMessageHandler(client: Client, rest: REST): void {
       return;
     }
 
-    const isMentioned = msg.mentions.users.has(client.user.id);
     const parentChannelId = msg.channel.isThread() ? msg.channel.parentId : null;
+
+    if (await isBotPaused()) {
+      return;
+    }
+
+    if (isWordleChannel(msg.channel.id, parentChannelId)) {
+      await handleWordleMessage(msg);
+      return;
+    }
+
+    const isMentioned = msg.mentions.users.has(client.user.id);
     const isInEthanChannel =
       ETHAN_CHANNEL_IDS.includes(msg.channel.id) ||
       (parentChannelId ? ETHAN_CHANNEL_IDS.includes(parentChannelId) : false);
     const hasCueWord = messageHasCueWord(msg.content);
 
     if (!isMentioned && !isInEthanChannel && !hasCueWord) {
-      return;
-    }
-
-    if (await isBotPaused()) {
       return;
     }
 

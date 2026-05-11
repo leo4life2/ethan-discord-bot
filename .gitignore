@@ -10,3 +10,5 @@ dist/
 temp_audio/
 prompt.json
 knowledge.json
+bot-state.json
+wordle-state.json
