@@ -244,14 +244,14 @@ function solvedText(challenge: WordleChallenge): string {
 
 async function ensureTodaysChallenge(channelId: string, announceChannel?: any): Promise<WordleChallenge | null> {
   const now = getPacificNow();
-  if (!isAtOrAfterDailyStart(now)) {
-    return null;
-  }
-
   const state = await readState();
   const existing = state.channels[channelId];
   if (existing?.localDate === now.dateKey) {
     return existing;
+  }
+
+  if (!isAtOrAfterDailyStart(now)) {
+    return null;
   }
 
   const challenge = createChallenge(now.dateKey, existing?.word);
