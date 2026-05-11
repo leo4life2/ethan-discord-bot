@@ -11,6 +11,7 @@ import * as KnowledgeHistory from '../commands/knowledge-history.js';
 import * as KnowledgeRollback from '../commands/knowledge-rollback.js';
 import * as PauseCommand from '../commands/pause.js';
 import * as StartCommand from '../commands/start.js';
+import * as WordleNewCommand from '../commands/wordle-new.js';
 import { TARGET_GUILD_IDS } from '../config.js';
 import { logger } from '../logger.js';
 
@@ -38,6 +39,7 @@ export async function registerSlashCommands(readyClient: any, rest: REST): Promi
       (KnowledgeRollback as any).data.toJSON(),
       (PauseCommand as any).data.toJSON(),
       (StartCommand as any).data.toJSON(),
+      (WordleNewCommand as any).data.toJSON(),
     ];
     for (const guildId of TARGET_GUILD_IDS) {
       try {

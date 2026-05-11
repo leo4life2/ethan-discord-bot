@@ -4,12 +4,18 @@ import path from 'node:path';
 import type { Client, Message } from 'discord.js';
 import { WORDLE_CHANNEL_IDS, WORDLE_STATE_PATH } from './config.js';
 import { logger } from './logger.js';
+import { openai } from './openaiClient.js';
+import { loadPrompt } from './promptStore.js';
 import { SAFE_ALLOWED_MENTIONS } from './utils/allowedMentions.js';
+import { withRetry } from './utils/retry.js';
 import { sanitizeDiscordMentions } from './utils/sanitize.js';
 
 const PACIFIC_TIME_ZONE = 'America/Los_Angeles';
 const CHALLENGE_HOUR = 8;
 const SCHEDULER_INTERVAL_MS = 60_000;
+const DEFAULT_WORDLE_CHANNEL_ID = WORDLE_CHANNEL_IDS[0] ?? '';
+
+type WordleTrigger = 'scheduled' | 'manual';
 
 const WORDLE_ANSWERS = [
   'about', 'above', 'abuse', 'actor', 'acute', 'admit', 'adopt', 'adult', 'after', 'again',
@@ -72,8 +78,16 @@ interface WordleChallenge {
   localDate: string;
   word: string;
   createdAt: string;
+  trigger?: WordleTrigger;
+  announcement?: string;
   solvedAt?: string;
   solvedBy?: WordleWinner;
+}
+
+interface StartWordleOptions {
+  trigger: WordleTrigger;
+  force?: boolean;
+  requestedBy?: string;
 }
 
 interface WordleState {
@@ -87,6 +101,44 @@ interface PacificNow {
 }
 
 const defaultState = (): WordleState => ({ channels: {} });
+
+const WORDLE_CHALLENGE_TEXT_FORMAT: any = {
+  type: 'json_schema',
+  name: 'wordle_challenge_format',
+  strict: true,
+  schema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      word: {
+        type: 'string',
+        description: 'The secret answer: exactly five lowercase English letters, no spaces.',
+      },
+      announcement: {
+        type: 'string',
+        description: 'A short Discord announcement with a tiny non-spoiler hint and Wordle instructions. Do not reveal the answer.',
+      },
+    },
+    required: ['word', 'announcement'],
+  },
+};
+
+const WORDLE_SOLVED_TEXT_FORMAT: any = {
+  type: 'json_schema',
+  name: 'wordle_solved_format',
+  strict: true,
+  schema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      message: {
+        type: 'string',
+        description: 'One short Discord line celebrating the solver. Do not reveal the answer.',
+      },
+    },
+    required: ['message'],
+  },
+};
 
 function getPacificNow(date = new Date()): PacificNow {
   const formatter = new Intl.DateTimeFormat('en-US', {
@@ -131,6 +183,12 @@ function normalizeChallenge(raw: any): WordleChallenge | undefined {
     return undefined;
   }
   const challenge: WordleChallenge = { localDate, word, createdAt };
+  if (raw.trigger === 'scheduled' || raw.trigger === 'manual') {
+    challenge.trigger = raw.trigger;
+  }
+  if (typeof raw.announcement === 'string' && raw.announcement.trim()) {
+    challenge.announcement = raw.announcement.trim();
+  }
   if (typeof raw.solvedAt === 'string') {
     challenge.solvedAt = raw.solvedAt;
   }
@@ -170,6 +228,171 @@ async function writeState(state: WordleState): Promise<void> {
   await fs.writeFile(abs, JSON.stringify(state, null, 2), 'utf8');
 }
 
+function currentCaliforniaDateTime(): string {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: PACIFIC_TIME_ZONE,
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    timeZoneName: 'short',
+  }).format(new Date());
+}
+
+async function getWordleSystemPrompt(userName: string): Promise<string> {
+  const stored = await loadPrompt();
+  const base = stored?.text ?? [
+    'You are Ethan, a playful AI robot who lives in a Discord server.',
+    'Keep messages casual, sharp, and alive.',
+  ].join('\n');
+  const currentDate = `current California datetime: ${currentCaliforniaDateTime()}`;
+  return base
+    .replace('{currentDate}', currentDate)
+    .replace('{userName}', userName);
+}
+
+function extractStructuredObject(response: any): any | null {
+  const outputs: any[] = Array.isArray(response?.output) ? response.output : [];
+  for (const outputItem of outputs) {
+    const parts: any[] = Array.isArray(outputItem?.content) ? outputItem.content : [];
+    for (const part of parts) {
+      if (part?.parsed && typeof part.parsed === 'object') {
+        return part.parsed;
+      }
+      if (part?.type === 'output_text' && typeof part?.text === 'string') {
+        try {
+          return JSON.parse(part.text);
+        } catch {
+          // keep looking
+        }
+      }
+    }
+  }
+
+  if (typeof response?.output_text === 'string') {
+    try {
+      return JSON.parse(response.output_text);
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function normalizeGeneratedWord(raw: unknown, previousWord?: string): string | null {
+  const word = String(raw ?? '').trim().toLowerCase();
+  if (!/^[a-z]{5}$/.test(word)) {
+    return null;
+  }
+  if (previousWord && word === previousWord) {
+    return null;
+  }
+  return word;
+}
+
+function fallbackAnnouncement(localDate: string): string {
+  return [
+    `Wordle with Ethan - ${localDate}`,
+    'A fresh five-letter puzzle just spawned somewhere between redstone dust and robot static.',
+    '',
+    'Reply with one five-letter guess. 🟩 correct spot, 🟨 wrong spot, ⬜ absent.',
+  ].join('\n');
+}
+
+function normalizeAnnouncement(raw: unknown, localDate: string, word: string): string {
+  let announcement = sanitizeDiscordMentions(String(raw ?? '')).trim();
+  const lower = announcement.toLowerCase();
+  if (
+    announcement.length < 20 ||
+    announcement.length > 1200 ||
+    lower.includes(word.toLowerCase()) ||
+    /@everyone|@here/i.test(announcement)
+  ) {
+    announcement = fallbackAnnouncement(localDate);
+  }
+
+  if (!/five-letter|5-letter/i.test(announcement) || !/🟩|green/i.test(announcement)) {
+    announcement = `${announcement.trim()}\n\nReply with one five-letter guess. 🟩 correct spot, 🟨 wrong spot, ⬜ absent.`;
+  }
+
+  return announcement;
+}
+
+async function generateChallengeWithLlm(
+  localDate: string,
+  previousWord: string | undefined,
+  trigger: WordleTrigger,
+): Promise<{ word: string; announcement: string } | null> {
+  try {
+    const systemPrompt = await getWordleSystemPrompt('Wordle players');
+    const response = await withRetry(
+      () =>
+        openai.responses.create({
+          model: 'gpt-5.1',
+          input: [
+            {
+              role: 'developer',
+              content: [
+                {
+                  type: 'input_text',
+                  text: `${systemPrompt}
+
+[Wordle mode]
+Generate a private Wordle puzzle for a Discord channel.
+- Return only the structured JSON fields.
+- Pick one common English answer with exactly five lowercase letters a-z.
+- Do not use a proper noun, profanity, plural ending in s, or an obscure word.
+- The announcement should sound like Ethan and can have Minecraft/robot flavor.
+- Include one tiny hint, but do not reveal the answer, its first letter, last letter, exact letters, rhyme, or spelling pattern.
+- The announcement must tell people to reply with one five-letter guess and explain 🟩 🟨 ⬜.
+- Never include @everyone, @here, or role/user mentions.
+- Previous word to avoid: ${previousWord ?? 'none'}.`,
+                },
+              ],
+            },
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'input_text',
+                  text: `Create the ${trigger} Wordle for ${localDate}. Keep the announcement under 700 characters.`,
+                },
+              ],
+            },
+          ],
+          reasoning: {
+            effort: 'low',
+            summary: 'auto',
+          },
+          text: {
+            format: WORDLE_CHALLENGE_TEXT_FORMAT,
+            verbosity: 'medium',
+          },
+          metadata: { purpose: 'wordle-challenge' },
+        }),
+      { operation: 'openai.responses.create (wordle-challenge)' },
+    );
+
+    const parsed = extractStructuredObject(response);
+    const word = normalizeGeneratedWord(parsed?.word, previousWord);
+    if (!word) {
+      return null;
+    }
+
+    return {
+      word,
+      announcement: normalizeAnnouncement(parsed?.announcement, localDate, word),
+    };
+  } catch (error) {
+    logger.error('Failed to generate Wordle challenge with LLM', { error });
+    return null;
+  }
+}
+
 function pickWord(previousWord?: string): string {
   let word = WORDLE_ANSWERS[crypto.randomInt(WORDLE_ANSWERS.length)];
   while (word === previousWord) {
@@ -178,21 +401,24 @@ function pickWord(previousWord?: string): string {
   return word;
 }
 
-function createChallenge(localDate: string, previousWord?: string): WordleChallenge {
+async function createChallenge(
+  localDate: string,
+  previousWord: string | undefined,
+  trigger: WordleTrigger,
+): Promise<WordleChallenge> {
+  const generated = await generateChallengeWithLlm(localDate, previousWord, trigger);
+  const word = generated?.word ?? pickWord(previousWord);
   return {
     localDate,
-    word: pickWord(previousWord),
+    word,
     createdAt: new Date().toISOString(),
+    trigger,
+    announcement: generated?.announcement ?? fallbackAnnouncement(localDate),
   };
 }
 
-function challengeIntro(localDate: string): string {
-  return [
-    `Wordle with Ethan - ${localDate}`,
-    'Guess today\'s five-letter word.',
-    '',
-    'Reply with one five-letter guess. 🟩 correct spot, 🟨 wrong spot, ⬜ absent.',
-  ].join('\n');
+function challengeIntro(challenge: WordleChallenge): string {
+  return challenge.announcement ?? fallbackAnnouncement(challenge.localDate);
 }
 
 function parseGuess(content: string): string | null {
@@ -239,28 +465,105 @@ function displayNameFor(message: Message): string {
 
 function solvedText(challenge: WordleChallenge): string {
   const winner = challenge.solvedBy?.username ? sanitizeDiscordMentions(challenge.solvedBy.username) : 'someone';
-  return `Already solved by ${winner}. The answer was ${challenge.word.toUpperCase()}.`;
+  return `Already solved by ${winner}. Ethan is back in normal chat mode until the next puzzle.`;
 }
 
-async function ensureTodaysChallenge(channelId: string, announceChannel?: any): Promise<WordleChallenge | null> {
+function fallbackSolvedMessage(winnerName: string): string {
+  return `${winnerName} got it. Ethan is emotionally placing a tiny diamond block on the scoreboard.`;
+}
+
+function normalizeSolvedMessage(raw: unknown, winnerName: string): string {
+  const message = sanitizeDiscordMentions(String(raw ?? '')).trim();
+  if (
+    message.length < 8 ||
+    message.length > 500 ||
+    /@everyone|@here/i.test(message)
+  ) {
+    return fallbackSolvedMessage(winnerName);
+  }
+  return message;
+}
+
+async function generateSolvedMessage(winnerName: string, score: string): Promise<string> {
+  try {
+    const systemPrompt = await getWordleSystemPrompt(winnerName);
+    const response = await withRetry(
+      () =>
+        openai.responses.create({
+          model: 'gpt-5.1',
+          input: [
+            {
+              role: 'developer',
+              content: [
+                {
+                  type: 'input_text',
+                  text: `${systemPrompt}
+
+[Wordle solved mode]
+Write one short Discord line celebrating someone solving Ethan's Wordle.
+- Use Ethan's existing personality.
+- Minecraft/robot flavor is welcome.
+- Do not reveal the secret word.
+- Do not mention or invent the answer.
+- Do not include @everyone, @here, user mentions, or role mentions.
+- Keep it under 220 characters.`,
+                },
+              ],
+            },
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'input_text',
+                  text: `${winnerName} solved the puzzle with score boxes ${score}. Write the celebration line.`,
+                },
+              ],
+            },
+          ],
+          reasoning: {
+            effort: 'low',
+            summary: 'auto',
+          },
+          text: {
+            format: WORDLE_SOLVED_TEXT_FORMAT,
+            verbosity: 'medium',
+          },
+          metadata: { purpose: 'wordle-solved' },
+        }),
+      { operation: 'openai.responses.create (wordle-solved)' },
+    );
+
+    const parsed = extractStructuredObject(response);
+    return normalizeSolvedMessage(parsed?.message, winnerName);
+  } catch (error) {
+    logger.error('Failed to generate Wordle solved message with LLM', { error });
+    return fallbackSolvedMessage(winnerName);
+  }
+}
+
+async function startWordleChallenge(
+  channelId: string,
+  announceChannel: any,
+  options: StartWordleOptions,
+): Promise<WordleChallenge | null> {
   const now = getPacificNow();
   const state = await readState();
   const existing = state.channels[channelId];
-  if (existing?.localDate === now.dateKey) {
+  if (!options.force && existing?.localDate === now.dateKey) {
     return existing;
   }
 
-  if (!isAtOrAfterDailyStart(now)) {
+  if (!options.force && !isAtOrAfterDailyStart(now)) {
     return null;
   }
 
-  const challenge = createChallenge(now.dateKey, existing?.word);
+  const challenge = await createChallenge(now.dateKey, existing?.word, options.trigger);
   state.channels[channelId] = challenge;
   await writeState(state);
 
   if (announceChannel && typeof announceChannel.send === 'function') {
     await announceChannel.send({
-      content: challengeIntro(challenge.localDate),
+      content: challengeIntro(challenge),
       allowedMentions: SAFE_ALLOWED_MENTIONS,
     });
   }
@@ -268,9 +571,15 @@ async function ensureTodaysChallenge(channelId: string, announceChannel?: any): 
   logger.info('Created Wordle challenge', {
     channelId,
     localDate: challenge.localDate,
+    trigger: options.trigger,
+    requestedBy: options.requestedBy,
   });
 
   return challenge;
+}
+
+async function ensureTodaysChallenge(channelId: string, announceChannel?: any): Promise<WordleChallenge | null> {
+  return startWordleChallenge(channelId, announceChannel, { trigger: 'scheduled' });
 }
 
 export function isWordleChannel(channelId: string, parentChannelId?: string | null): boolean {
@@ -284,6 +593,35 @@ function wordleChannelIdFor(message: Message): string {
     return parentChannelId;
   }
   return message.channel.id;
+}
+
+export async function triggerManualWordleForChannel(channel: any, requestedBy?: string): Promise<WordleChallenge | null> {
+  if (!channel || typeof channel.id !== 'string' || typeof channel.send !== 'function') {
+    return null;
+  }
+  if (!isWordleChannel(channel.id)) {
+    return null;
+  }
+  return startWordleChallenge(channel.id, channel, {
+    trigger: 'manual',
+    force: true,
+    requestedBy,
+  });
+}
+
+export async function triggerManualWordleForChannelId(
+  client: Client,
+  channelId = DEFAULT_WORDLE_CHANNEL_ID,
+  requestedBy?: string,
+): Promise<WordleChallenge | null> {
+  if (!channelId || !WORDLE_CHANNEL_IDS.includes(channelId)) {
+    return null;
+  }
+  const channel = await client.channels.fetch(channelId);
+  if (!channel || !channel.isTextBased() || typeof (channel as any).send !== 'function') {
+    return null;
+  }
+  return triggerManualWordleForChannel(channel as any, requestedBy);
 }
 
 export async function shouldHandleWordleMessage(message: Message): Promise<boolean> {
@@ -338,8 +676,10 @@ export async function handleWordleMessage(message: Message): Promise<void> {
       };
       await writeState(state);
     }
+    const winnerName = displayNameFor(message);
+    const solvedMessage = await generateSolvedMessage(winnerName, score);
     await message.reply({
-      content: `${score}\n${displayNameFor(message)} got it.`,
+      content: `${score}\n${solvedMessage}`,
       allowedMentions: SAFE_ALLOWED_MENTIONS,
     });
     return;

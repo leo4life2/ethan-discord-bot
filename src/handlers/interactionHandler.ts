@@ -13,6 +13,7 @@ import * as KnowledgeHistory from '../commands/knowledge-history.js';
 import * as KnowledgeRollback from '../commands/knowledge-rollback.js';
 import * as PauseCommand from '../commands/pause.js';
 import * as StartCommand from '../commands/start.js';
+import * as WordleNewCommand from '../commands/wordle-new.js';
 import { SAFE_ALLOWED_MENTIONS } from '../utils/allowedMentions.js';
 import { isGuildAllowed } from '../config.js';
 import { logger } from '../logger.js';
@@ -29,6 +30,7 @@ const commands = new Map<string, { execute: (interaction: any) => Promise<any> }
   ['knowledge-rollback', { execute: KnowledgeRollback.execute }],
   ['pause', { execute: PauseCommand.execute }],
   ['start', { execute: StartCommand.execute }],
+  ['wordle-new', { execute: WordleNewCommand.execute }],
 ]);
 
 export function registerInteractionHandler(client: Client): void {
