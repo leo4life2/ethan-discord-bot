@@ -1,6 +1,9 @@
 import type { Message } from "discord.js";
 import path from 'node:path';
 import fs from 'node:fs/promises';
+import { Agent, run, webSearchTool } from '@openai/agents';
+import type { AgentInputItem, RunStreamEvent } from '@openai/agents';
+import { z } from 'zod';
 import { loadPrompt } from './promptStore.js';
 import { loadKnowledge } from './knowledgeStore.js';
 import { openai } from './openaiClient.js';
@@ -8,43 +11,51 @@ import { logger } from './logger.js';
 import { SAFE_ALLOWED_MENTIONS } from './utils/allowedMentions.js';
 import { sanitizeDiscordMentions } from './utils/sanitize.js';
 import { withRetry } from './utils/retry.js';
+import {
+  ETHAN_REPLY_MAX_TURNS,
+  ETHAN_REPLY_MODEL,
+  ETHAN_REPLY_REASONING_EFFORT,
+  ETHAN_REPLY_VERBOSITY,
+  ETHAN_RESEARCH_ALLOWED_DOMAINS,
+  ETHAN_RESEARCH_EXTERNAL_WEB_ACCESS,
+  ETHAN_RESEARCH_MAX_OUTPUT_TOKENS,
+  ETHAN_RESEARCH_MAX_SOURCES,
+  ETHAN_RESEARCH_MAX_TURNS,
+  ETHAN_RESEARCH_MODEL,
+  ETHAN_RESEARCH_PARALLEL_TOOL_CALLS,
+  ETHAN_RESEARCH_REASONING_EFFORT,
+  ETHAN_RESEARCH_SEARCH_CONTEXT_SIZE,
+  ETHAN_RESEARCH_TOOL_CHOICE,
+  ETHAN_RESEARCH_VERBOSITY,
+} from './config.js';
 
 let lastTtsTimestamp = 0;
 const MAX_REACTIONS_PER_MESSAGE = 5;
 const MAX_REACTION_USERS_PER_EMOJI = 6;
 
-const ETHAN_RESPONSE_TEXT_FORMAT: any = {
-  type: 'json_schema',
-  name: 'ethan_reply_format',
-  strict: true,
-  schema: {
-    type: 'object',
-    additionalProperties: false,
-    properties: {
-      should_send_text_message: {
-        type: 'boolean',
-        description: 'Whether Ethan should send a text message to the channel.',
-      },
-      should_react: {
-        type: 'boolean',
-        description: 'Whether Ethan should react to the latest message.',
-      },
-      generate_speech: {
-        type: 'boolean',
-        description: 'Whether Ethan should generate and send a voice message.',
-      },
-      say_in_discord: {
-        type: 'string',
-        description: 'Text content for message and/or speech. If not sending text or speech, return an empty string. DO NOT include the `[Ethan]:` prefix.',
-      },
-      reaction_emoji: {
-        type: 'string',
-        description: 'Unicode emoji to react with on the latest message. If not reacting, return an empty string.',
-      },
-    },
-    required: ['should_send_text_message', 'should_react', 'generate_speech', 'say_in_discord', 'reaction_emoji'],
-  },
-};
+const EthanResponseSchema = z.object({
+  should_send_text_message: z.boolean().describe('Whether Ethan should send a text message to the channel.'),
+  should_react: z.boolean().describe('Whether Ethan should react to the latest message.'),
+  generate_speech: z.boolean().describe('Whether Ethan should generate and send a voice message.'),
+  say_in_discord: z.string().describe('Text content for message and/or speech. Do not include the `[Ethan]:` prefix.'),
+  reaction_emoji: z.string().describe('Unicode emoji to react with on the latest message. If not reacting, return an empty string.'),
+});
+
+const ResearchSourceSchema = z.object({
+  title: z.string().describe('Short source title.'),
+  url: z.string().describe('Source URL.'),
+  relevant_claim: z.string().describe('One concise claim this source supports.'),
+});
+
+const ResearchBriefSchema = z.object({
+  answer: z.string().describe('Concise research answer for Ethan to use.'),
+  confidence: z.enum(['low', 'medium', 'high']).describe('Confidence in the researched answer.'),
+  sources: z.array(ResearchSourceSchema).max(8).describe('Sources used for the answer.'),
+  caveats: z.string().describe('Any uncertainty, source weakness, or missing information. Empty string if none.'),
+});
+
+type EthanResponse = z.infer<typeof EthanResponseSchema>;
+type ResearchBrief = z.infer<typeof ResearchBriefSchema>;
 
 const SYSTEM_PROMPT_APPENDIX = [
   '[System Prompt Appendix]',
@@ -55,7 +66,11 @@ const SYSTEM_PROMPT_APPENDIX = [
   'At least one action must be true: should_send_text_message, should_react, or generate_speech.',
   'Always include all schema fields.',
   'If should_send_text_message is true or generate_speech is true, provide say_in_discord; otherwise set say_in_discord to an empty string.',
-  'If should_react is true, provide reaction_emoji; otherwise set reaction_emoji to an empty string.'
+  'If should_react is true, provide reaction_emoji; otherwise set reaction_emoji to an empty string.',
+  'You have a research_web tool backed by a stronger research specialist.',
+  'Use research_web before replying when the question depends on current outside facts, credible sources, technical details you are unsure about, or a difficult support/research question.',
+  'Do not call research_web for casual chat, obvious conversation, or MinePal facts already present in this prompt.',
+  'When you use research_web, fold the result into Ethan voice and include concise source URLs when they matter.',
 ].join('\n');
 
 function generateKnowledgeSection(entries: { text: string; added_at: string }[]): string {
@@ -188,15 +203,117 @@ async function buildReactionSummary(message: Message): Promise<string> {
   return `[Reactions: ${summaryParts.join(' | ')}${extraSuffix}]`;
 }
 
-// Using Responses API; message parts will be constructed inline as needed
+function formatResearchBrief(brief: ResearchBrief | undefined): string {
+  if (!brief) {
+    return 'research_result: unavailable';
+  }
 
-/** Interface for the structured output from OpenAI */
-interface EthanResponse {
-  should_send_text_message?: boolean;
-  should_react?: boolean;
-  generate_speech?: boolean;
-  say_in_discord?: string;
-  reaction_emoji?: string;
+  const sources = brief.sources
+    .slice(0, ETHAN_RESEARCH_MAX_SOURCES)
+    .map((source, index) => `${index + 1}. ${source.title}: ${source.relevant_claim} (${source.url})`);
+
+  return [
+    `research_answer: ${brief.answer}`,
+    `confidence: ${brief.confidence}`,
+    sources.length > 0 ? `sources:\n${sources.join('\n')}` : 'sources: none',
+    brief.caveats ? `caveats: ${brief.caveats}` : 'caveats: none',
+  ].join('\n');
+}
+
+function isResearchActivityEvent(event: RunStreamEvent): boolean {
+  if (event.type === 'agent_updated_stream_event') {
+    return event.agent.name === 'Research brain';
+  }
+
+  if (event.type === 'run_item_stream_event') {
+    const item = event.item as any;
+    return item?.agent?.name === 'Research brain' ||
+      item?.toolName === 'research_web' ||
+      item?.rawItem?.name === 'research_web' ||
+      event.name === 'tool_search_called';
+  }
+
+  const rawType = (event.data as any)?.type;
+  return typeof rawType === 'string' && rawType.includes('web_search_call');
+}
+
+function createEthanAgent(
+  systemPrompt: string,
+  onResearchStream: (event: RunStreamEvent) => void | Promise<void>,
+) {
+  const webSearchOptions = {
+    userLocation: { type: 'approximate', country: 'US' },
+    searchContextSize: ETHAN_RESEARCH_SEARCH_CONTEXT_SIZE,
+    externalWebAccess: ETHAN_RESEARCH_EXTERNAL_WEB_ACCESS,
+    ...(ETHAN_RESEARCH_ALLOWED_DOMAINS.length > 0
+      ? { filters: { allowedDomains: [...ETHAN_RESEARCH_ALLOWED_DOMAINS] } }
+      : {}),
+  } as const;
+
+  const researchAgent = new Agent({
+    name: 'Research brain',
+    instructions: [
+      'You are Ethan\'s private research specialist.',
+      'Research only the narrow question passed to you.',
+      'Use web search for current facts, external claims, technical uncertainty, or source-backed answers.',
+      'Prefer primary or authoritative sources. Avoid unsupported forum claims unless the user specifically needs community evidence.',
+      'Return concise findings for Ethan to rewrite in his Discord voice.',
+      'Do not mention hidden chain of thought. Do not invent sources. If sources are weak or missing, say so in caveats.',
+    ].join('\n'),
+    model: ETHAN_RESEARCH_MODEL,
+    modelSettings: {
+      reasoning: {
+        effort: ETHAN_RESEARCH_REASONING_EFFORT,
+        summary: 'auto',
+      },
+      text: {
+        verbosity: ETHAN_RESEARCH_VERBOSITY,
+      },
+      toolChoice: ETHAN_RESEARCH_TOOL_CHOICE,
+      parallelToolCalls: ETHAN_RESEARCH_PARALLEL_TOOL_CALLS,
+      maxTokens: ETHAN_RESEARCH_MAX_OUTPUT_TOKENS,
+      store: true,
+    },
+    tools: [
+      webSearchTool(webSearchOptions),
+    ],
+    outputType: ResearchBriefSchema,
+  });
+
+  return new Agent({
+    name: 'Ethan reply brain',
+    instructions: systemPrompt,
+    model: ETHAN_REPLY_MODEL,
+    modelSettings: {
+      reasoning: {
+        effort: ETHAN_REPLY_REASONING_EFFORT,
+        summary: 'auto',
+      },
+      text: {
+        verbosity: ETHAN_REPLY_VERBOSITY,
+      },
+      toolChoice: 'auto',
+      parallelToolCalls: false,
+      store: true,
+    },
+    tools: [
+      researchAgent.asTool({
+        toolName: 'research_web',
+        toolDescription: [
+          'Research a current, source-backed, technical, or uncertain question before Ethan replies.',
+          'Input should include the exact question, relevant Discord context, and what kind of source or freshness matters.',
+        ].join(' '),
+        runOptions: {
+          maxTurns: ETHAN_RESEARCH_MAX_TURNS,
+        },
+        onStream: async ({ event }) => {
+          await onResearchStream(event);
+        },
+        customOutputExtractor: (result) => formatResearchBrief(result.finalOutput as ResearchBrief | undefined),
+      }),
+    ],
+    outputType: EthanResponseSchema,
+  });
 }
 
 export interface HandleSpeechDirective {
@@ -228,22 +345,7 @@ export async function handle(
   }
   const textChannel: any = channel;
 
-  // Build Responses API input array
-  const inputItems: Array<{
-    role: string;
-    content: Array<any>;
-  }> = [];
-
-  // Developer/system instructions as developer role
-  inputItems.push({
-    role: "developer",
-    content: [
-      {
-        type: "input_text",
-        text: systemPrompt,
-      },
-    ],
-  });
+  const inputItems: AgentInputItem[] = [];
 
   // Map historical messages (oldest first), excluding the latest message to avoid duplication
   const filteredHistory = history.filter((msg) => msg.id !== messageMeta.id);
@@ -300,31 +402,36 @@ export async function handle(
             : reactionSummary;
         }
 
-        const role = msg.author.id === botId ? 'assistant' : 'user';
-        const partType = role === 'assistant' ? 'output_text' : 'input_text';
-
-        const contentParts: any[] = [
-          {
-            type: partType,
-            text: `[${msg.author.username}]: ${effectiveContent}`,
-          },
-        ];
+        const isAssistant = msg.author.id === botId;
+        const textPart = {
+          type: isAssistant ? 'output_text' : 'input_text',
+          text: `[${msg.author.username}]: ${effectiveContent}`,
+        } as const;
 
         // Include image attachments from historical user messages
-        if (role === 'user' && msg.attachments.size > 0) {
+        const contentParts: any[] = [textPart];
+        if (!isAssistant && msg.attachments.size > 0) {
           const imageAttachments = Array.from(msg.attachments.values()).filter(
             (attachment) => attachment.contentType?.startsWith('image/')
           );
           imageAttachments.forEach((attachment) => {
             contentParts.push({
               type: 'input_image',
-              image_url: attachment.url,
+              image: attachment.url,
             });
           });
         }
 
+        if (isAssistant) {
+          return {
+            role: 'assistant' as const,
+            status: 'completed' as const,
+            content: contentParts,
+          };
+        }
+
         return {
-          role,
+          role: 'user' as const,
           content: contentParts,
         };
       })
@@ -348,7 +455,7 @@ export async function handle(
     imageAttachments.forEach((attachment) => {
       latestContentParts.push({
         type: 'input_image',
-        image_url: attachment.url,
+        image: attachment.url,
       });
     });
   }
@@ -416,268 +523,182 @@ export async function handle(
       }
     };
 
-    // DEBUG: Log full input to LLM
-    logger.debug('LLM input', { input: inputItems });
+    const handleProgressEvent = async (event: RunStreamEvent) => {
+      if (hasCompleted) return;
 
-    const stream = await withRetry(
-      () =>
-        Promise.resolve(
-          openai.responses.stream({
-            model: 'gpt-5.1',
-            input: inputItems as any,
-            text: {
-              format: ETHAN_RESPONSE_TEXT_FORMAT,
-              verbosity: 'medium',
-            },
-            reasoning: {
-              effort: 'low',
-              summary: 'auto',
-            },
-            tools: [
-              {
-                type: 'web_search',
-                user_location: { type: 'approximate', country: 'US' },
-                search_context_size: 'low',
-              } as any,
-            ],
-            store: true,
-          }),
-        ),
-      { operation: 'openai.responses.stream (discord reply)' },
-    );
+      if (isResearchActivityEvent(event)) {
+        await ensureProgressMessage('researching...');
+        await safeEdit('researching...');
+        return;
+      }
 
-    return await new Promise((resolve) => {
-      stream.on('event', async (event: any) => {
+      if (event.type === 'raw_model_stream_event') {
+        const type = (event.data as any)?.type;
+        if (type === 'response.reasoning_summary_text.delta') {
+          await ensureProgressMessage('thinking...');
+          await safeEdit('thinking...');
+        }
+        if (type === 'response.error') {
+          logger.error('OpenAI agent stream error event', { event: event.data });
+        }
+      }
+    };
+
+    const ethanAgent = createEthanAgent(systemPrompt, handleProgressEvent);
+
+    logger.debug('LLM input', {
+      input: inputItems,
+      replyModel: ETHAN_REPLY_MODEL,
+      researchModel: ETHAN_RESEARCH_MODEL,
+    });
+
+    const stream = await run(ethanAgent, inputItems, {
+      stream: true,
+      maxTurns: ETHAN_REPLY_MAX_TURNS,
+    });
+
+    for await (const event of stream) {
+      try {
+        await handleProgressEvent(event);
+      } catch (e) {
+        logger.error('Error in agent stream event handler', { error: e });
+      }
+    }
+    await stream.completed;
+    if (stream.error) {
+      throw stream.error;
+    }
+
+    hasCompleted = true;
+    const structured = stream.finalOutput as EthanResponse | undefined;
+    logger.debug('LLM output', {
+      output: structured,
+      lastResponseId: stream.lastResponseId,
+    });
+
+    if (!structured) {
+      logger.warn('OpenAI agent response content was empty.');
+      const fallback = "My brain's a bit fuzzy, what was that?";
+      if (!sentAnyProgress) {
+        await textChannel.send({
+          content: fallback,
+          allowedMentions: SAFE_ALLOWED_MENTIONS,
+        });
+      } else if (progressMessage) {
+        await progressMessage.edit({
+          content: fallback,
+          allowedMentions: SAFE_ALLOWED_MENTIONS,
+        });
+      }
+      return undefined;
+    }
+
+    let shouldSendText = Boolean(structured.should_send_text_message);
+    let shouldReact = Boolean(structured.should_react);
+    const wantsSpeech = Boolean(structured.generate_speech);
+
+    // Enforce at least one action if the model returns none.
+    if (!shouldSendText && !shouldReact && !wantsSpeech) {
+      shouldReact = true;
+    }
+
+    if (shouldReact) {
+      const reactionEmoji = structured.reaction_emoji.trim() || '👀';
+      try {
+        await messageMeta.react(reactionEmoji);
+      } catch (e) {
+        logger.error('Failed to add reaction to latest message', {
+          error: e,
+          reactionEmoji,
+          messageId: messageMeta.id,
+          channelId: messageMeta.channelId,
+        });
+      }
+    }
+
+    const needsTextPayload = shouldSendText || wantsSpeech;
+    let finalText = '';
+    if (needsTextPayload) {
+      finalText = structured.say_in_discord
+        // Strip a leading "[Ethan]:" prefix if the model includes it anyway.
+        // Also tolerate minor spacing like "[ Ethan ] :" and remove all whitespace after the colon.
+        .replace(/^\s*(?:\[\s*Ethan\s*\]\s*:|Ethan\s*:)\s*/i, '')
+        .replace(/^\s*Voice message:\s*/i, '')
+        .trim();
+      finalText = sanitizeDiscordMentions(finalText);
+      if (!finalText) {
+        finalText = "My brain's a bit fuzzy, what was that?";
+      }
+    }
+
+    let textAlreadySent = false;
+    if (shouldSendText) {
+      if (progressMessage) {
         try {
-          const type = event?.type;
-          // Ignore any late events after completion
-          if (hasCompleted) return;
-          if (type === 'response.web_search_call.in_progress') {
-            await ensureProgressMessage('searching the web...');
-            await safeEdit('searching the web...');
-            return;
-          }
-          if (type === 'response.reasoning_summary_text.delta') {
-            await ensureProgressMessage('thinking...');
-            await safeEdit('thinking...');
-            return;
-          }
-          if (type === 'response.completed') {
-            const finalResponse = event?.response ?? event;
-            hasCompleted = true;
-
-            // DEBUG: Log full output from LLM
-            logger.debug('LLM output', { output: finalResponse });
-            let rawText: string | undefined = typeof finalResponse?.output_text === 'string' ? finalResponse.output_text : undefined;
-            let structured: EthanResponse | null = null;
-            const urlCitations: Array<{ title: string; url: string; start: number; end: number }> = [];
-
-            // Inspect outputs for JSON parsed content or text
-            const outputs: any[] = Array.isArray(finalResponse?.output) ? finalResponse.output : [];
-            for (const outputItem of outputs) {
-              const parts: any[] = Array.isArray(outputItem?.content) ? outputItem.content : [];
-              for (const part of parts) {
-                const partType = part?.type;
-                if (partType === 'output_text' && typeof part?.text === 'string') {
-                  // Collect URL citations from annotations and replace in-place
-                  const anns: any[] = Array.isArray(part?.annotations) ? part.annotations : [];
-                  const urlAnns = anns.filter((a) => a?.type === 'url_citation' && typeof a?.url === 'string');
-                  urlAnns.forEach((ann) => {
-                    urlCitations.push({
-                      title: ann.title,
-                      url: ann.url,
-                      start: ann.start_index,
-                      end: ann.end_index,
-                    });
-                  });
-
-                  let replaced = part.text as string;
-                  // Do not inline replace by indices (could shift positions across parts). Instead, save to urlCitations and handle cite tokens after.
-
-                  rawText = (rawText || '') + replaced;
-                } else if ((partType === 'json' || partType === 'tool_result' || partType === 'output_json_schema') && part?.parsed) {
-                  try {
-                    structured = part.parsed as EthanResponse;
-                  } catch {
-                    // ignore
-                  }
-                } else if (partType === 'refusal' && typeof part?.refusal === 'string') {
-                  rawText = (rawText || '') + part.refusal;
-                }
-              }
-            }
-
-            if (!structured && rawText && typeof rawText === 'string') {
-              try {
-                structured = JSON.parse(rawText);
-              } catch {
-                // not JSON, proceed with raw text
-              }
-            }
-
-            if (!structured && (!rawText || typeof rawText !== 'string' || rawText.trim() === '')) {
-              logger.warn('OpenAI response content was empty.');
-              const fallback = "My brain's a bit fuzzy, what was that?";
-              if (!sentAnyProgress) {
-                await textChannel.send({
-                  content: fallback,
-                  allowedMentions: SAFE_ALLOWED_MENTIONS,
-                });
-              } else if (progressMessage) {
-                await safeEdit(fallback);
-              }
-              resolve(undefined);
-              return;
-            }
-
-            let shouldSendText = Boolean(structured?.should_send_text_message);
-            let shouldReact = Boolean(structured?.should_react);
-            const wantsSpeech = Boolean(structured?.generate_speech);
-
-            // Enforce at least one action if the model returns none.
-            if (!shouldSendText && !shouldReact && !wantsSpeech) {
-              shouldReact = true;
-            }
-
-            if (shouldReact) {
-              const reactionEmoji = typeof structured?.reaction_emoji === 'string' && structured.reaction_emoji.trim()
-                ? structured.reaction_emoji.trim()
-                : '👀';
-              try {
-                await messageMeta.react(reactionEmoji);
-              } catch (e) {
-                logger.error('Failed to add reaction to latest message', {
-                  error: e,
-                  reactionEmoji,
-                  messageId: messageMeta.id,
-                  channelId: messageMeta.channelId,
-                });
-              }
-            }
-
-            const needsTextPayload = shouldSendText || wantsSpeech;
-            let finalText = '';
-            if (needsTextPayload) {
-              finalText = (structured?.say_in_discord ?? rawText ?? '')
-                // Strip a leading "[Ethan]:" prefix if the model includes it anyway.
-                // Also tolerate minor spacing like "[ Ethan ] :" and remove all whitespace after the colon.
-                .replace(/^\s*(?:\[\s*Ethan\s*\]\s*:|Ethan\s*:)\s*/i, '')
-                .replace(/^\s*Voice message:\s*/i, '')
-                .trim();
-              finalText = sanitizeDiscordMentions(finalText);
-              if (!finalText) {
-                finalText = "My brain's a bit fuzzy, what was that?";
-              }
-
-              // Replace any cite tokens like "citeturn0forecast0" with URL(s)
-              // Match ligature-like private-use tokens we observed: "cite..."
-              const citeTokenRegex = /cite[^]+/g;
-              if (citeTokenRegex.test(finalText)) {
-                const uniqueUrls = Array.from(new Set(urlCitations.map(c => c.url)));
-                const replacement = uniqueUrls.length > 0
-                  ? (uniqueUrls.length === 1 ? ` (${uniqueUrls[0]})` : ` (${uniqueUrls.join(', ')})`)
-                  : '';
-                finalText = finalText.replace(citeTokenRegex, replacement);
-              }
-            }
-
-            let textAlreadySent = false;
-            if (shouldSendText) {
-              if (progressMessage) {
-                try {
-                  const chunks = splitIntoDiscordMessages(finalText || '');
-                  if (chunks.length > 0) {
-                    await progressMessage.edit({
-                      content: chunks[0],
-                      allowedMentions: SAFE_ALLOWED_MENTIONS,
-                    });
-                    for (let i = 1; i < chunks.length; i++) {
-                      await textChannel.send({
-                        content: chunks[i],
-                        allowedMentions: SAFE_ALLOWED_MENTIONS,
-                      });
-                    }
-                  }
-                  textAlreadySent = true;
-                } catch (e) {
-                  logger.error('Failed to set final message content', { error: e });
-                  try {
-                    const chunks = splitIntoDiscordMessages(finalText || '');
-                    for (const chunk of chunks) {
-                      await textChannel.send({
-                        content: chunk,
-                        allowedMentions: SAFE_ALLOWED_MENTIONS,
-                      });
-                    }
-                    textAlreadySent = true;
-                  } catch (sendFallbackError) {
-                    logger.error('Failed to send text fallback after edit failure', { error: sendFallbackError });
-                  }
-                }
-              } else {
-                const chunks = splitIntoDiscordMessages(finalText || '');
-                for (const chunk of chunks) {
-                  await textChannel.send({
-                    content: chunk,
-                    allowedMentions: SAFE_ALLOWED_MENTIONS,
-                  });
-                }
-                textAlreadySent = true;
-              }
-            } else if (progressMessage && !wantsSpeech) {
-              try {
-                await progressMessage.delete();
-              } catch (e) {
-                logger.error('Failed to delete progress message after non-text response', { error: e });
-              }
-            }
-
-            if (wantsSpeech) {
-              if (progressMessage && !textAlreadySent) {
-                try {
-                  await progressMessage.delete();
-                } catch (e) {
-                  logger.error('Failed to delete progress message before voice response', { error: e });
-                }
-              }
-              resolve({
-                text: finalText,
-                generateSpeech: true,
-                shouldSendTextMessage: shouldSendText,
-                textAlreadySent,
-              });
-              return;
-            }
-
-            resolve(undefined);
-            return;
-          }
-          if (type === 'response.error') {
-            logger.error('OpenAI API stream error event', { event });
-            if (!sentAnyProgress) {
+          const chunks = splitIntoDiscordMessages(finalText || '');
+          if (chunks.length > 0) {
+            await progressMessage.edit({
+              content: chunks[0],
+              allowedMentions: SAFE_ALLOWED_MENTIONS,
+            });
+            for (let i = 1; i < chunks.length; i++) {
               await textChannel.send({
-                content: 'Oops, my brain short circuited. Say again?',
+                content: chunks[i],
                 allowedMentions: SAFE_ALLOWED_MENTIONS,
               });
-            } else if (progressMessage) {
-              try {
-                await progressMessage.edit({
-                  content: 'Oops, my brain short circuited. Say again?',
-                  allowedMentions: SAFE_ALLOWED_MENTIONS,
-                });
-              } catch (e) {
-                logger.error('Failed to set error content on progress message', { error: e });
-              }
             }
-            resolve(undefined);
-            return;
           }
+          textAlreadySent = true;
         } catch (e) {
-          logger.error('Error in stream event handler', { error: e });
-          resolve(undefined);
+          logger.error('Failed to set final message content', { error: e });
+          try {
+            const chunks = splitIntoDiscordMessages(finalText || '');
+            for (const chunk of chunks) {
+              await textChannel.send({
+                content: chunk,
+                allowedMentions: SAFE_ALLOWED_MENTIONS,
+              });
+            }
+            textAlreadySent = true;
+          } catch (sendFallbackError) {
+            logger.error('Failed to send text fallback after edit failure', { error: sendFallbackError });
+          }
         }
-      });
-    });
+      } else {
+        const chunks = splitIntoDiscordMessages(finalText || '');
+        for (const chunk of chunks) {
+          await textChannel.send({
+            content: chunk,
+            allowedMentions: SAFE_ALLOWED_MENTIONS,
+          });
+        }
+        textAlreadySent = true;
+      }
+    } else if (progressMessage && !wantsSpeech) {
+      try {
+        await progressMessage.delete();
+      } catch (e) {
+        logger.error('Failed to delete progress message after non-text response', { error: e });
+      }
+    }
+
+    if (wantsSpeech) {
+      if (progressMessage && !textAlreadySent) {
+        try {
+          await progressMessage.delete();
+        } catch (e) {
+          logger.error('Failed to delete progress message before voice response', { error: e });
+        }
+      }
+      return {
+        text: finalText,
+        generateSpeech: true,
+        shouldSendTextMessage: shouldSendText,
+        textAlreadySent,
+      };
+    }
+
+    return undefined;
   } catch (error) {
     logger.error('OpenAI API error', { error });
     await textChannel.send({
