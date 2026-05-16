@@ -6,6 +6,7 @@ cd "$(dirname "$0")"
 
 LOG_LEVEL="info"
 BOT_MODE="all"
+BUILD_NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=384}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -37,10 +38,10 @@ git reset --hard origin/main
 echo "===> Installing deps and building"
 if command -v pnpm >/dev/null 2>&1; then
   pnpm install --frozen-lockfile
-  pnpm run build
+  NODE_OPTIONS="$BUILD_NODE_OPTIONS" pnpm run build
 else
   npm install --package-lock=false
-  npm run build
+  NODE_OPTIONS="$BUILD_NODE_OPTIONS" npm run build
 fi
 
 echo "===> Restarting app (tmux)"
