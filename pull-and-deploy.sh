@@ -39,7 +39,7 @@ if command -v pnpm >/dev/null 2>&1; then
   pnpm install --frozen-lockfile
   pnpm run build
 else
-  npm ci
+  npm install --package-lock=false
   npm run build
 fi
 
