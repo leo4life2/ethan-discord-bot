@@ -32,6 +32,7 @@ import {
 let lastTtsTimestamp = 0;
 const MAX_REACTIONS_PER_MESSAGE = 5;
 const MAX_REACTION_USERS_PER_EMOJI = 6;
+const MAX_PROGRESS_DETAIL_LENGTH = 220;
 
 const EthanResponseSchema = z.object({
   should_send_text_message: z.boolean().describe('Whether Ethan should send a text message to the channel.'),
@@ -56,6 +57,7 @@ const ResearchBriefSchema = z.object({
 
 type EthanResponse = z.infer<typeof EthanResponseSchema>;
 type ResearchBrief = z.infer<typeof ResearchBriefSchema>;
+type ProgressSource = 'reply' | 'research';
 
 const SYSTEM_PROMPT_APPENDIX = [
   '[System Prompt Appendix]',
@@ -220,6 +222,23 @@ function formatResearchBrief(brief: ResearchBrief | undefined): string {
   ].join('\n');
 }
 
+function getRawModelEventData(event: RunStreamEvent): any | null {
+  if (event.type !== 'raw_model_stream_event') return null;
+  const data = event.data as any;
+  return data?.event ?? data;
+}
+
+function formatProgressStatus(prefix: string, detail?: string): string {
+  const cleaned = (detail ?? '').replace(/\s+/g, ' ').trim();
+  if (!cleaned) return `${prefix}...`;
+
+  const truncated = cleaned.length > MAX_PROGRESS_DETAIL_LENGTH
+    ? `${cleaned.slice(0, MAX_PROGRESS_DETAIL_LENGTH - 3).trimEnd()}...`
+    : cleaned;
+
+  return `${prefix}: ${truncated}`;
+}
+
 function isResearchActivityEvent(event: RunStreamEvent): boolean {
   if (event.type === 'agent_updated_stream_event') {
     return event.agent.name === 'Research brain';
@@ -233,13 +252,13 @@ function isResearchActivityEvent(event: RunStreamEvent): boolean {
       event.name === 'tool_search_called';
   }
 
-  const rawType = (event.data as any)?.type;
+  const rawType = getRawModelEventData(event)?.type;
   return typeof rawType === 'string' && rawType.includes('web_search_call');
 }
 
 function createEthanAgent(
   systemPrompt: string,
-  onResearchStream: (event: RunStreamEvent) => void | Promise<void>,
+  onResearchStream: (event: RunStreamEvent, source: ProgressSource) => void | Promise<void>,
 ) {
   const webSearchOptions = {
     userLocation: { type: 'approximate', country: 'US' },
@@ -307,7 +326,7 @@ function createEthanAgent(
           maxTurns: ETHAN_RESEARCH_MAX_TURNS,
         },
         onStream: async ({ event }) => {
-          await onResearchStream(event);
+          await onResearchStream(event, 'research');
         },
         customOutputExtractor: (result) => formatResearchBrief(result.finalOutput as ResearchBrief | undefined),
       }),
@@ -472,6 +491,8 @@ export async function handle(
     let nextAllowedEditAt = 0;
     const editCooldownMs = 1200;
     let currentProgressText = '';
+    let researchSummaryText = '';
+    let replySummaryText = '';
 
     const ensureProgressMessage = async (initialText: string) => {
       if (hasCompleted) return;
@@ -500,11 +521,11 @@ export async function handle(
       try { await progressMessagePromise; } catch { /* ignore */ }
     };
 
-    const safeEdit = async (text: string) => {
+    const safeEdit = async (text: string, options: { force?: boolean } = {}) => {
       if (hasCompleted) return;
       if (text === currentProgressText) return; // Skip if no visible change
       const now = Date.now();
-      if (now < nextAllowedEditAt) return;
+      if (!options.force && now < nextAllowedEditAt) return;
       nextAllowedEditAt = now + editCooldownMs;
       if (!progressMessage) {
         if (progressMessagePromise) {
@@ -523,23 +544,82 @@ export async function handle(
       }
     };
 
-    const handleProgressEvent = async (event: RunStreamEvent) => {
+    const updateProgress = async (
+      prefix: string,
+      detail?: string,
+      options: { force?: boolean } = {},
+    ) => {
+      const text = formatProgressStatus(prefix, detail);
+      await ensureProgressMessage(text);
+      await safeEdit(text, options);
+    };
+
+    const handleProgressEvent = async (event: RunStreamEvent, source: ProgressSource = 'reply') => {
       if (hasCompleted) return;
 
-      if (isResearchActivityEvent(event)) {
-        await ensureProgressMessage('researching...');
-        await safeEdit('researching...');
+      const isResearch = source === 'research' || isResearchActivityEvent(event);
+
+      if (isResearch && event.type === 'agent_updated_stream_event') {
+        await updateProgress('researching');
         return;
       }
 
       if (event.type === 'raw_model_stream_event') {
-        const type = (event.data as any)?.type;
+        const rawEvent = getRawModelEventData(event);
+        const type = rawEvent?.type;
+
         if (type === 'response.reasoning_summary_text.delta') {
-          await ensureProgressMessage('thinking...');
-          await safeEdit('thinking...');
+          const delta = typeof rawEvent.delta === 'string' ? rawEvent.delta : '';
+          if (isResearch) {
+            researchSummaryText += delta;
+            await updateProgress('researching', researchSummaryText);
+          } else {
+            replySummaryText += delta;
+            await updateProgress('thinking', replySummaryText);
+          }
+          return;
         }
+
+        if (type === 'response.reasoning_summary_text.done') {
+          const text = typeof rawEvent.text === 'string'
+            ? rawEvent.text
+            : isResearch
+              ? researchSummaryText
+              : replySummaryText;
+          await updateProgress(isResearch ? 'researching' : 'thinking', text, { force: true });
+          return;
+        }
+
+        if (isResearch && type === 'response.web_search_call.in_progress') {
+          await updateProgress('researching', 'starting web search');
+          return;
+        }
+
+        if (isResearch && type === 'response.web_search_call.searching') {
+          await updateProgress('researching', 'searching the web');
+          return;
+        }
+
+        if (isResearch && type === 'response.web_search_call.completed') {
+          await updateProgress('researching', 'reading search results', { force: true });
+          return;
+        }
+
         if (type === 'response.error') {
-          logger.error('OpenAI agent stream error event', { event: event.data });
+          logger.error('OpenAI agent stream error event', { event: rawEvent ?? event.data });
+        }
+        return;
+      }
+
+      if (isResearch && event.type === 'run_item_stream_event') {
+        if (event.name === 'tool_search_called') {
+          await updateProgress('researching', 'searching the web');
+        } else if (event.name === 'tool_search_output_created') {
+          await updateProgress('researching', 'reading search results', { force: true });
+        } else if (event.name === 'reasoning_item_created') {
+          await updateProgress('researching', 'thinking through the sources');
+        } else {
+          await updateProgress('researching');
         }
       }
     };
