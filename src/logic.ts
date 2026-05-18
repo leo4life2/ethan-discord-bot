@@ -77,18 +77,15 @@ type EthanResponse = z.infer<typeof EthanResponseSchema>;
 type ResearchBrief = z.infer<typeof ResearchBriefSchema>;
 type SupportTicketInput = z.infer<typeof SupportTicketInputSchema>;
 type ProgressSource = 'reply' | 'research';
-
-const supportTicketsBySourceMessageId = new Map<string, {
+type SupportTicketResult = {
   threadId: string;
   url: string;
   title: string;
-}>();
+};
 
-function rememberSupportTicket(sourceMessageId: string, ticket: {
-  threadId: string;
-  url: string;
-  title: string;
-}): void {
+const supportTicketsBySourceMessageId = new Map<string, SupportTicketResult>();
+
+function rememberSupportTicket(sourceMessageId: string, ticket: SupportTicketResult): void {
   if (supportTicketsBySourceMessageId.size >= SUPPORT_TICKET_CACHE_MAX_ENTRIES) {
     const oldestKey = supportTicketsBySourceMessageId.keys().next().value;
     if (oldestKey) supportTicketsBySourceMessageId.delete(oldestKey);
@@ -263,6 +260,15 @@ function formatResearchBrief(brief: ResearchBrief | undefined): string {
   ].join('\n');
 }
 
+function appendSupportTicketLink(text: string, ticket: SupportTicketResult | null): string {
+  if (!ticket) return text;
+  if (text.includes(ticket.url)) return text;
+
+  const prefix = text.trim();
+  const linkLine = `Support ticket: ${ticket.url}`;
+  return prefix ? `${prefix}\n\n${linkLine}` : linkLine;
+}
+
 function truncateText(text: string, maxLength: number): string {
   if (text.length <= maxLength) return text;
   return `${text.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
@@ -377,7 +383,11 @@ function getSupportForumTagIds(supportChannel: any): string[] | undefined {
   return fallbackTag?.id ? [fallbackTag.id] : undefined;
 }
 
-function createSupportTicketTool(messageMeta: Message, history: Message[]) {
+function createSupportTicketTool(
+  messageMeta: Message,
+  history: Message[],
+  onSupportTicketResult: (ticket: SupportTicketResult) => void,
+) {
   return tool({
     name: 'create_support_ticket',
     description: [
@@ -401,6 +411,7 @@ function createSupportTicketTool(messageMeta: Message, history: Message[]) {
     execute: async (input) => {
       const existing = supportTicketsBySourceMessageId.get(messageMeta.id);
       if (existing) {
+        onSupportTicketResult(existing);
         return [
           'support_ticket_created: false',
           'duplicate_for_source_message: true',
@@ -438,12 +449,14 @@ function createSupportTicketTool(messageMeta: Message, history: Message[]) {
       });
       const starterMessage = await thread.fetchStarterMessage().catch(() => null);
       const url = starterMessage?.url ?? `https://discord.com/channels/${thread.guildId}/${thread.id}`;
-
-      rememberSupportTicket(messageMeta.id, {
+      const ticket = {
         threadId: thread.id,
         url,
         title,
-      });
+      };
+
+      rememberSupportTicket(messageMeta.id, ticket);
+      onSupportTicketResult(ticket);
 
       logger.info('Created support ticket', {
         threadId: thread.id,
@@ -494,6 +507,7 @@ function createEthanAgent(
   onResearchStream: (event: RunStreamEvent, source: ProgressSource) => void | Promise<void>,
   messageMeta: Message,
   history: Message[],
+  onSupportTicketResult: (ticket: SupportTicketResult) => void,
 ) {
   const webSearchOptions = {
     userLocation: { type: 'approximate', country: 'US' },
@@ -552,7 +566,7 @@ function createEthanAgent(
   ];
 
   if (ETHAN_SUPPORT_TICKET_TOOL_ENABLED) {
-    tools.push(createSupportTicketTool(messageMeta, history));
+    tools.push(createSupportTicketTool(messageMeta, history, onSupportTicketResult));
   }
 
   return new Agent({
@@ -733,6 +747,7 @@ export async function handle(
     const editCooldownMs = 1200;
     let currentProgressText = '';
     let researchProgressDots = MIN_RESEARCH_PROGRESS_DOTS - 1;
+    let supportTicketResult: SupportTicketResult | null = null;
 
     const ensureProgressMessage = async (initialText: string) => {
       if (hasCompleted) return;
@@ -835,7 +850,15 @@ export async function handle(
       }
     };
 
-    const ethanAgent = createEthanAgent(systemPrompt, handleProgressEvent, messageMeta, history);
+    const ethanAgent = createEthanAgent(
+      systemPrompt,
+      handleProgressEvent,
+      messageMeta,
+      history,
+      (ticket) => {
+        supportTicketResult = ticket;
+      },
+    );
 
     logger.debug('LLM input', {
       input: inputItems,
@@ -869,7 +892,9 @@ export async function handle(
 
     if (!structured) {
       logger.warn('OpenAI agent response content was empty.');
-      const fallback = "My brain's a bit fuzzy, what was that?";
+      const fallback = supportTicketResult
+        ? appendSupportTicketLink('I made a support ticket for this.', supportTicketResult)
+        : "My brain's a bit fuzzy, what was that?";
       if (!sentAnyProgress) {
         await textChannel.send({
           content: fallback,
@@ -886,7 +911,12 @@ export async function handle(
 
     let shouldSendText = Boolean(structured.should_send_text_message);
     let shouldReact = Boolean(structured.should_react);
-    const wantsSpeech = Boolean(structured.generate_speech);
+    let wantsSpeech = Boolean(structured.generate_speech);
+
+    if (supportTicketResult) {
+      shouldSendText = true;
+      wantsSpeech = false;
+    }
 
     // Enforce at least one action if the model returns none.
     if (!shouldSendText && !shouldReact && !wantsSpeech) {
@@ -918,8 +948,11 @@ export async function handle(
         .trim();
       finalText = sanitizeDiscordMentions(finalText);
       if (!finalText) {
-        finalText = "My brain's a bit fuzzy, what was that?";
+        finalText = supportTicketResult
+          ? 'I made a support ticket for this.'
+          : "My brain's a bit fuzzy, what was that?";
       }
+      finalText = appendSupportTicketLink(finalText, supportTicketResult);
     }
 
     let textAlreadySent = false;
