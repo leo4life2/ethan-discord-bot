@@ -63,7 +63,7 @@ export const ETHAN_RESEARCH_MODEL = process.env.ETHAN_RESEARCH_MODEL || 'gpt-5.5
 export const ETHAN_RESEARCH_REASONING_EFFORT = parseEnum(
   process.env.ETHAN_RESEARCH_REASONING_EFFORT,
   REASONING_EFFORTS,
-  'high',
+  'medium',
 );
 export const ETHAN_RESEARCH_VERBOSITY = parseEnum(
   process.env.ETHAN_RESEARCH_VERBOSITY,
@@ -73,16 +73,16 @@ export const ETHAN_RESEARCH_VERBOSITY = parseEnum(
 export const ETHAN_RESEARCH_SEARCH_CONTEXT_SIZE = parseEnum(
   process.env.ETHAN_RESEARCH_SEARCH_CONTEXT_SIZE,
   SEARCH_CONTEXT_SIZES,
-  'medium',
+  'low',
 );
 export const ETHAN_RESEARCH_TOOL_CHOICE = parseEnum(
   process.env.ETHAN_RESEARCH_TOOL_CHOICE,
   TOOL_CHOICES,
   'auto',
 );
-export const ETHAN_RESEARCH_MAX_TURNS = parsePositiveInteger(process.env.ETHAN_RESEARCH_MAX_TURNS, 6);
-export const ETHAN_RESEARCH_MAX_OUTPUT_TOKENS = parsePositiveInteger(process.env.ETHAN_RESEARCH_MAX_OUTPUT_TOKENS, 5400);
-export const ETHAN_RESEARCH_MAX_SOURCES = parsePositiveInteger(process.env.ETHAN_RESEARCH_MAX_SOURCES, 8);
+export const ETHAN_RESEARCH_MAX_TURNS = parsePositiveInteger(process.env.ETHAN_RESEARCH_MAX_TURNS, 3);
+export const ETHAN_RESEARCH_MAX_OUTPUT_TOKENS = parsePositiveInteger(process.env.ETHAN_RESEARCH_MAX_OUTPUT_TOKENS, 2200);
+export const ETHAN_RESEARCH_MAX_SOURCES = parsePositiveInteger(process.env.ETHAN_RESEARCH_MAX_SOURCES, 3);
 export const ETHAN_RESEARCH_EXTERNAL_WEB_ACCESS = parseBoolean(process.env.ETHAN_RESEARCH_EXTERNAL_WEB_ACCESS, true);
 export const ETHAN_RESEARCH_PARALLEL_TOOL_CALLS = parseBoolean(process.env.ETHAN_RESEARCH_PARALLEL_TOOL_CALLS, false);
 export const ETHAN_RESEARCH_ALLOWED_DOMAINS = Object.freeze(parseCsv(process.env.ETHAN_RESEARCH_ALLOWED_DOMAINS));
