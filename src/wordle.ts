@@ -14,6 +14,9 @@ const PACIFIC_TIME_ZONE = 'America/Los_Angeles';
 const CHALLENGE_HOUR = 8;
 const SCHEDULER_INTERVAL_MS = 60_000;
 const DEFAULT_WORDLE_CHANNEL_ID = WORDLE_CHANNEL_IDS[0] ?? '';
+const MIN_WORDLE_LENGTH = 5;
+const MAX_WORDLE_LENGTH = 8;
+const WORDLE_WORD_PATTERN = /^[a-z]{5,8}$/;
 
 type WordleTrigger = 'scheduled' | 'manual';
 
@@ -67,6 +70,18 @@ const WORDLE_ANSWERS = [
   'video', 'virus', 'visit', 'vital', 'voice', 'waste', 'watch', 'water', 'wheel', 'where',
   'which', 'while', 'white', 'whole', 'whose', 'woman', 'women', 'world', 'worry', 'worse',
   'worst', 'worth', 'would', 'wound', 'write', 'wrong', 'wrote', 'yield', 'young', 'youth',
+  'beacon', 'biome', 'border', 'branch', 'bridge', 'bucket', 'candle', 'canyon', 'castle',
+  'cavern', 'copper', 'crouch', 'crystal', 'desert', 'dragon', 'forest', 'furnace', 'glider',
+  'helmet', 'island', 'jungle', 'ladder', 'lantern', 'market', 'mining', 'module', 'nether',
+  'portal', 'potion', 'quartz', 'rocket', 'shield', 'signal', 'silver', 'temple', 'ticket',
+  'tunnel', 'village', 'warden', 'window', 'wizard', 'ancient', 'battery', 'campfire',
+  'command', 'compass', 'creeper', 'diamond', 'emerald', 'factory', 'gateway', 'harvest',
+  'library', 'machine', 'monster', 'outpost', 'pickaxe', 'pioneer', 'railway', 'reactor',
+  'scanner', 'shulker', 'storage', 'texture', 'upgrade', 'venture', 'voltage', 'weather',
+  'workshop', 'zeppelin', 'artifact', 'backpack', 'baseline',
+  'crafting', 'daylight', 'delivery', 'engineer', 'fortress',
+  'guardian', 'operator', 'overland', 'pipeline', 'platform', 'redstone',
+  'resource', 'skeleton', 'snapshot', 'treasure', 'villager',
 ] as const;
 
 interface WordleWinner {
@@ -120,7 +135,10 @@ const WORDLE_CHALLENGE_TEXT_FORMAT: any = {
     properties: {
       word: {
         type: 'string',
-        description: 'The secret answer: exactly five lowercase English letters, no spaces.',
+        minLength: MIN_WORDLE_LENGTH,
+        maxLength: MAX_WORDLE_LENGTH,
+        pattern: '^[a-z]+$',
+        description: 'The secret answer: 5 to 8 lowercase English letters, no spaces.',
       },
       announcement: {
         type: 'string',
@@ -187,7 +205,7 @@ function normalizeChallenge(raw: any): WordleChallenge | undefined {
   const localDate = typeof raw.localDate === 'string' ? raw.localDate : '';
   const word = typeof raw.word === 'string' ? raw.word.toLowerCase() : '';
   const createdAt = typeof raw.createdAt === 'string' ? raw.createdAt : '';
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(localDate) || !/^[a-z]{5}$/.test(word) || !createdAt) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(localDate) || !WORDLE_WORD_PATTERN.test(word) || !createdAt) {
     return undefined;
   }
   const challenge: WordleChallenge = { localDate, word, createdAt };
@@ -210,12 +228,12 @@ function normalizeChallenge(raw: any): WordleChallenge | undefined {
 function normalizeUsedWord(raw: any): WordleUsedWord | undefined {
   if (typeof raw === 'string') {
     const word = raw.trim().toLowerCase();
-    return /^[a-z]{5}$/.test(word) ? { word } : undefined;
+    return WORDLE_WORD_PATTERN.test(word) ? { word } : undefined;
   }
 
   if (!raw || typeof raw !== 'object') return undefined;
   const word = typeof raw.word === 'string' ? raw.word.trim().toLowerCase() : '';
-  if (!/^[a-z]{5}$/.test(word)) return undefined;
+  if (!WORDLE_WORD_PATTERN.test(word)) return undefined;
 
   const usedWord: WordleUsedWord = { word };
   if (typeof raw.localDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.localDate)) {
@@ -362,7 +380,7 @@ function extractStructuredObject(response: any): any | null {
 
 function normalizeGeneratedWord(raw: unknown, usedWords: ReadonlySet<string>): string | null {
   const word = String(raw ?? '').trim().toLowerCase();
-  if (!/^[a-z]{5}$/.test(word)) {
+  if (!WORDLE_WORD_PATTERN.test(word)) {
     return null;
   }
   if (usedWords.has(word)) {
@@ -371,12 +389,20 @@ function normalizeGeneratedWord(raw: unknown, usedWords: ReadonlySet<string>): s
   return word;
 }
 
-function fallbackAnnouncement(localDate: string): string {
+function wordLengthLabel(length: number): string {
+  return `${length}-letter`;
+}
+
+function wordLengthRangeLabel(): string {
+  return `${MIN_WORDLE_LENGTH}-${MAX_WORDLE_LENGTH} letter`;
+}
+
+function fallbackAnnouncement(localDate: string, wordLength = MIN_WORDLE_LENGTH): string {
   return [
     `Wordle with Ethan - ${localDate}`,
-    'A fresh five-letter puzzle just spawned somewhere between redstone dust and robot static.',
+    `A fresh ${wordLengthLabel(wordLength)} puzzle just spawned somewhere between redstone dust and robot static.`,
     '',
-    'Reply with one five-letter guess. 🟩 correct spot, 🟨 wrong spot, ⬜ absent.',
+    `Reply with one ${wordLengthLabel(wordLength)} guess. 🟩 correct spot, 🟨 wrong spot, ⬜ absent.`,
   ].join('\n');
 }
 
@@ -389,11 +415,12 @@ function normalizeAnnouncement(raw: unknown, localDate: string, word: string): s
     lower.includes(word.toLowerCase()) ||
     /@everyone|@here/i.test(announcement)
   ) {
-    announcement = fallbackAnnouncement(localDate);
+    announcement = fallbackAnnouncement(localDate, word.length);
   }
 
-  if (!/five-letter|5-letter/i.test(announcement) || !/🟩|green/i.test(announcement)) {
-    announcement = `${announcement.trim()}\n\nReply with one five-letter guess. 🟩 correct spot, 🟨 wrong spot, ⬜ absent.`;
+  const mentionsExpectedLength = new RegExp(`${word.length}\\s*-?\\s*letter`, 'i').test(announcement);
+  if (!mentionsExpectedLength || !/🟩|green/i.test(announcement)) {
+    announcement = `${announcement.trim()}\n\nReply with one ${wordLengthLabel(word.length)} guess. 🟩 correct spot, 🟨 wrong spot, ⬜ absent.`;
   }
 
   return announcement;
@@ -423,11 +450,13 @@ async function generateChallengeWithLlm(
 [Wordle mode]
 Generate a private Wordle puzzle for a Discord channel.
 - Return only the structured JSON fields.
-- Pick one common English answer with exactly five lowercase letters a-z.
+- Pick one common English answer between ${MIN_WORDLE_LENGTH} and ${MAX_WORDLE_LENGTH} lowercase letters a-z.
+- Use Ethan's personality when choosing the secret word itself, not just when writing the announcement.
+- Prefer vivid, playable words with robot, Minecraft, adventure, building, puzzle, or internet energy when they are natural English words.
 - Do not use a proper noun, profanity, plural ending in s, or an obscure word.
 - The announcement should sound like Ethan and can have Minecraft/robot flavor.
 - Include one tiny hint, but do not reveal the answer, its first letter, last letter, exact letters, rhyme, or spelling pattern.
-- The announcement must tell people to reply with one five-letter guess and explain 🟩 🟨 ⬜.
+- The announcement must tell people the exact answer length and explain 🟩 🟨 ⬜.
 - Never include @everyone, @here, or role/user mentions.
 - Already used words to avoid forever in this channel: ${usedWordsText}.`,
                 },
@@ -473,7 +502,8 @@ Generate a private Wordle puzzle for a Discord channel.
 }
 
 function pickWord(usedWords: ReadonlySet<string>, previousWord?: string): string {
-  const unusedWords = WORDLE_ANSWERS.filter((word) => !usedWords.has(word));
+  const answerPool = WORDLE_ANSWERS.filter((word) => WORDLE_WORD_PATTERN.test(word));
+  const unusedWords = answerPool.filter((word) => !usedWords.has(word));
   if (unusedWords.length > 0) {
     return unusedWords[crypto.randomInt(unusedWords.length)];
   }
@@ -481,8 +511,8 @@ function pickWord(usedWords: ReadonlySet<string>, previousWord?: string): string
   logger.warn('Wordle answer pool exhausted; allowing answer reuse', {
     usedWordCount: usedWords.size,
   });
-  const fallbackWords = WORDLE_ANSWERS.filter((word) => word !== previousWord);
-  const pool = fallbackWords.length > 0 ? fallbackWords : WORDLE_ANSWERS;
+  const fallbackWords = answerPool.filter((word) => word !== previousWord);
+  const pool = fallbackWords.length > 0 ? fallbackWords : answerPool;
   return pool[crypto.randomInt(pool.length)];
 }
 
@@ -505,12 +535,12 @@ async function createChallenge(
     word,
     createdAt: new Date().toISOString(),
     trigger,
-    announcement: generated?.announcement ?? fallbackAnnouncement(localDate),
+    announcement: generated?.announcement ?? fallbackAnnouncement(localDate, word.length),
   };
 }
 
 function challengeIntro(challenge: WordleChallenge): string {
-  return challenge.announcement ?? fallbackAnnouncement(challenge.localDate);
+  return challenge.announcement ?? fallbackAnnouncement(challenge.localDate, challenge.word.length);
 }
 
 function parseGuess(content: string): string | null {
@@ -519,7 +549,7 @@ function parseGuess(content: string): string | null {
     .replace(/^guess\s*[:,-]?\s*/i, '')
     .trim()
     .toLowerCase();
-  return /^[a-z]{5}$/.test(stripped) ? stripped : null;
+  return WORDLE_WORD_PATTERN.test(stripped) ? stripped : null;
 }
 
 export function scoreWordleGuess(guess: string, answer: string): string {
@@ -746,7 +776,15 @@ export async function handleWordleMessage(message: Message): Promise<void> {
   const guess = parseGuess(message.content);
   if (!guess) {
     await message.reply({
-      content: 'Send one five-letter guess, like `crane`.',
+      content: `Send one ${wordLengthRangeLabel()} guess, like \`crane\` or \`pickaxe\`.`,
+      allowedMentions: SAFE_ALLOWED_MENTIONS,
+    });
+    return;
+  }
+
+  if (guess.length !== challenge.word.length) {
+    await message.reply({
+      content: `Today's puzzle is ${wordLengthLabel(challenge.word.length)}. Send one ${wordLengthLabel(challenge.word.length)} guess.`,
       allowedMentions: SAFE_ALLOWED_MENTIONS,
     });
     return;
