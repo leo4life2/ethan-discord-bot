@@ -38,7 +38,7 @@ const MAX_REACTION_USERS_PER_EMOJI = 6;
 const MIN_RESEARCH_PROGRESS_DOTS = 3;
 const MAX_RESEARCH_PROGRESS_DOTS = 160;
 const SUPPORT_TICKET_TITLE_MAX_LENGTH = 90;
-const SUPPORT_TICKET_BODY_MAX_LENGTH = 1900;
+const SUPPORT_TICKET_MESSAGE_MAX_LENGTH = 2000;
 const SUPPORT_TICKET_CONTEXT_MAX_MESSAGES = 6;
 const SUPPORT_TICKET_AUTO_ARCHIVE_DURATION_MINUTES = 10080;
 const SUPPORT_TICKET_CACHE_MAX_ENTRIES = 200;
@@ -67,10 +67,10 @@ const ResearchBriefSchema = z.object({
 const SupportTicketInputSchema = z.object({
   title: z.string().min(1).max(SUPPORT_TICKET_TITLE_MAX_LENGTH).describe('Short developer-readable title for the support forum post.'),
   severity: z.enum(['low', 'medium', 'high', 'urgent']).describe('How severe the MinePal issue appears from the conversation.'),
-  user_impact: z.string().max(600).describe('What the user is blocked by or experiencing. Empty string if unknown.'),
-  summary: z.string().min(1).max(1200).describe('Concise factual summary of the MinePal problem developers should know about.'),
-  evidence: z.array(z.string().min(1).max(400)).max(8).describe('Specific observations from the conversation. Do not include speculation.'),
-  requested_action: z.string().max(600).describe('What developers should investigate or do next. Empty string if unclear.'),
+  user_impact: z.string().describe('What the user is blocked by or experiencing. Empty string if unknown.'),
+  summary: z.string().min(1).describe('Concise factual summary of the MinePal problem developers should know about.'),
+  evidence: z.array(z.string().min(1)).describe('Specific observations from the conversation. Do not include speculation.'),
+  requested_action: z.string().describe('What developers should investigate or do next. Empty string if unclear.'),
 });
 
 type EthanResponse = z.infer<typeof EthanResponseSchema>;
@@ -269,6 +269,36 @@ function appendSupportTicketLink(text: string, ticket: SupportTicketResult | nul
   return prefix ? `${prefix}\n\n${linkLine}` : linkLine;
 }
 
+function splitDiscordTextPreservingContent(text: string, maxLength = 2000): string[] {
+  if (!text) return [''];
+  if (text.length <= maxLength) return [text];
+
+  const chunks: string[] = [];
+  let start = 0;
+
+  while (start < text.length) {
+    let end = Math.min(start + maxLength, text.length);
+
+    if (end < text.length) {
+      const candidate = text.slice(start, end);
+      const splitOptions = [
+        { index: candidate.lastIndexOf('\n\n'), length: 2 },
+        { index: candidate.lastIndexOf('\n'), length: 1 },
+        { index: candidate.lastIndexOf(' '), length: 1 },
+      ];
+      const split = splitOptions.find((option) => option.index > maxLength * 0.5);
+      if (split) {
+        end = start + split.index + split.length;
+      }
+    }
+
+    chunks.push(text.slice(start, end));
+    start = end;
+  }
+
+  return chunks;
+}
+
 function truncateText(text: string, maxLength: number): string {
   if (text.length <= maxLength) return text;
   return `${text.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
@@ -307,7 +337,7 @@ function formatSupportContextLine(message: Message): string {
     content = embed.description?.trim() || embed.title?.trim() || '[embed]';
   }
 
-  const safeContent = truncateText(sanitizeSupportTicketText(content || '[no text]'), 260);
+  const safeContent = sanitizeSupportTicketText(content || '[no text]');
   return `- ${message.author.username}: ${safeContent}`;
 }
 
@@ -326,7 +356,7 @@ function buildSupportTicketBody(input: SupportTicketInput, messageMeta: Message,
   }
 
   const evidenceLines = input.evidence.length > 0
-    ? input.evidence.map((item) => `- ${truncateText(sanitizeSupportTicketText(item), 350)}`)
+    ? input.evidence.map((item) => `- ${sanitizeSupportTicketText(item)}`)
     : ['- No specific evidence provided.'];
 
   const contextLines = contextMessages.length > 0
@@ -341,22 +371,22 @@ function buildSupportTicketBody(input: SupportTicketInput, messageMeta: Message,
     `**Channel:** ${channelLabel}`,
     '',
     '**User impact**',
-    truncateText(sanitizeSupportTicketText(input.user_impact.trim() || 'Unknown.'), 550),
+    sanitizeSupportTicketText(input.user_impact.trim() || 'Unknown.'),
     '',
     '**Summary**',
-    truncateText(sanitizeSupportTicketText(input.summary.trim()), 900),
+    sanitizeSupportTicketText(input.summary.trim()),
     '',
     '**Evidence**',
     ...evidenceLines,
     '',
     '**Requested action**',
-    truncateText(sanitizeSupportTicketText(input.requested_action.trim() || 'Investigate the issue above.'), 550),
+    sanitizeSupportTicketText(input.requested_action.trim() || 'Investigate the issue above.'),
     '',
     '**Recent context**',
     ...contextLines,
   ];
 
-  return truncateText(lines.join('\n'), SUPPORT_TICKET_BODY_MAX_LENGTH);
+  return lines.join('\n');
 }
 
 function getSupportForumTagIds(supportChannel: any): string[] | undefined {
@@ -436,17 +466,26 @@ function createSupportTicketTool(
 
       const title = sanitizeSupportTicketTitle(input.title);
       const content = buildSupportTicketBody(input, messageMeta, history);
+      const contentChunks = splitDiscordTextPreservingContent(content, SUPPORT_TICKET_MESSAGE_MAX_LENGTH);
       const appliedTags = getSupportForumTagIds(supportChannel);
       const thread = await (supportChannel as any).threads.create({
         name: title,
         autoArchiveDuration: SUPPORT_TICKET_AUTO_ARCHIVE_DURATION_MINUTES,
         ...(appliedTags ? { appliedTags } : {}),
         message: {
-          content,
+          content: contentChunks[0] || '**Created by Ethan**',
           allowedMentions: SAFE_ALLOWED_MENTIONS,
         },
         reason: `Ethan support ticket from message ${messageMeta.id}`,
       });
+
+      for (const chunk of contentChunks.slice(1)) {
+        await thread.send({
+          content: chunk,
+          allowedMentions: SAFE_ALLOWED_MENTIONS,
+        });
+      }
+
       const starterMessage = await thread.fetchStarterMessage().catch(() => null);
       const url = starterMessage?.url ?? `https://discord.com/channels/${thread.guildId}/${thread.id}`;
       const ticket = {
@@ -465,6 +504,7 @@ function createSupportTicketTool(
         severity: input.severity,
         supportForumChannelId: ETHAN_SUPPORT_FORUM_CHANNEL_ID,
         appliedTags,
+        bodyChunks: contentChunks.length,
         sourceMessageId: messageMeta.id,
         sourceChannelId: messageMeta.channelId,
       });
@@ -474,6 +514,7 @@ function createSupportTicketTool(
         `thread_id: ${thread.id}`,
         `url: ${url}`,
         `title: ${title}`,
+        `body_chunks: ${contentChunks.length}`,
       ].join('\n');
     },
   });
