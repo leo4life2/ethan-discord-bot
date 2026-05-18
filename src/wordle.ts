@@ -84,6 +84,13 @@ interface WordleChallenge {
   solvedBy?: WordleWinner;
 }
 
+interface WordleUsedWord {
+  word: string;
+  localDate?: string;
+  usedAt?: string;
+  trigger?: WordleTrigger;
+}
+
 interface StartWordleOptions {
   trigger: WordleTrigger;
   force?: boolean;
@@ -92,6 +99,7 @@ interface StartWordleOptions {
 
 interface WordleState {
   channels: Record<string, WordleChallenge>;
+  usedWords: Record<string, WordleUsedWord[]>;
 }
 
 interface PacificNow {
@@ -100,7 +108,7 @@ interface PacificNow {
   minute: number;
 }
 
-const defaultState = (): WordleState => ({ channels: {} });
+const defaultState = (): WordleState => ({ channels: {}, usedWords: {} });
 
 const WORDLE_CHALLENGE_TEXT_FORMAT: any = {
   type: 'json_schema',
@@ -199,14 +207,83 @@ function normalizeChallenge(raw: any): WordleChallenge | undefined {
   return challenge;
 }
 
+function normalizeUsedWord(raw: any): WordleUsedWord | undefined {
+  if (typeof raw === 'string') {
+    const word = raw.trim().toLowerCase();
+    return /^[a-z]{5}$/.test(word) ? { word } : undefined;
+  }
+
+  if (!raw || typeof raw !== 'object') return undefined;
+  const word = typeof raw.word === 'string' ? raw.word.trim().toLowerCase() : '';
+  if (!/^[a-z]{5}$/.test(word)) return undefined;
+
+  const usedWord: WordleUsedWord = { word };
+  if (typeof raw.localDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.localDate)) {
+    usedWord.localDate = raw.localDate;
+  }
+  if (typeof raw.usedAt === 'string' && raw.usedAt.trim()) {
+    usedWord.usedAt = raw.usedAt;
+  }
+  if (raw.trigger === 'scheduled' || raw.trigger === 'manual') {
+    usedWord.trigger = raw.trigger;
+  }
+  return usedWord;
+}
+
+function normalizeUsedWordHistory(raw: any): WordleUsedWord[] {
+  const entries = Array.isArray(raw) ? raw : [];
+  const seen = new Set<string>();
+  const history: WordleUsedWord[] = [];
+
+  for (const entryRaw of entries) {
+    const entry = normalizeUsedWord(entryRaw);
+    if (!entry || seen.has(entry.word)) continue;
+    seen.add(entry.word);
+    history.push(entry);
+  }
+
+  return history;
+}
+
+function addUsedWord(state: WordleState, channelId: string, challenge: WordleChallenge): void {
+  const history = state.usedWords[channelId] ?? [];
+  if (history.some((entry) => entry.word === challenge.word)) {
+    state.usedWords[channelId] = history;
+    return;
+  }
+
+  state.usedWords[channelId] = [
+    ...history,
+    {
+      word: challenge.word,
+      localDate: challenge.localDate,
+      usedAt: challenge.createdAt,
+      trigger: challenge.trigger,
+    },
+  ];
+}
+
+function usedWordsForChannel(state: WordleState, channelId: string): string[] {
+  return (state.usedWords[channelId] ?? []).map((entry) => entry.word);
+}
+
 function normalizeState(raw: any): WordleState {
   if (!raw || typeof raw !== 'object') return defaultState();
   const state = defaultState();
+  const usedWords = raw.usedWords && typeof raw.usedWords === 'object' ? raw.usedWords : {};
+  for (const [channelId, historyRaw] of Object.entries(usedWords)) {
+    const history = normalizeUsedWordHistory(historyRaw);
+    if (history.length > 0) {
+      state.usedWords[channelId] = history;
+    }
+  }
+
   const channels = raw.channels && typeof raw.channels === 'object' ? raw.channels : {};
   for (const [channelId, challengeRaw] of Object.entries(channels)) {
     const challenge = normalizeChallenge(challengeRaw);
     if (challenge) {
       state.channels[channelId] = challenge;
+      addUsedWord(state, channelId, challenge);
     }
   }
   return state;
@@ -283,12 +360,12 @@ function extractStructuredObject(response: any): any | null {
   return null;
 }
 
-function normalizeGeneratedWord(raw: unknown, previousWord?: string): string | null {
+function normalizeGeneratedWord(raw: unknown, usedWords: ReadonlySet<string>): string | null {
   const word = String(raw ?? '').trim().toLowerCase();
   if (!/^[a-z]{5}$/.test(word)) {
     return null;
   }
-  if (previousWord && word === previousWord) {
+  if (usedWords.has(word)) {
     return null;
   }
   return word;
@@ -324,11 +401,13 @@ function normalizeAnnouncement(raw: unknown, localDate: string, word: string): s
 
 async function generateChallengeWithLlm(
   localDate: string,
-  previousWord: string | undefined,
+  usedWords: readonly string[],
   trigger: WordleTrigger,
 ): Promise<{ word: string; announcement: string } | null> {
   try {
     const systemPrompt = await getWordleSystemPrompt('Wordle players');
+    const usedWordSet = new Set(usedWords);
+    const usedWordsText = usedWords.length > 0 ? usedWords.join(', ') : 'none';
     const response = await withRetry(
       () =>
         openai.responses.create({
@@ -350,7 +429,7 @@ Generate a private Wordle puzzle for a Discord channel.
 - Include one tiny hint, but do not reveal the answer, its first letter, last letter, exact letters, rhyme, or spelling pattern.
 - The announcement must tell people to reply with one five-letter guess and explain 🟩 🟨 ⬜.
 - Never include @everyone, @here, or role/user mentions.
-- Previous word to avoid: ${previousWord ?? 'none'}.`,
+- Already used words to avoid forever in this channel: ${usedWordsText}.`,
                 },
               ],
             },
@@ -378,7 +457,7 @@ Generate a private Wordle puzzle for a Discord channel.
     );
 
     const parsed = extractStructuredObject(response);
-    const word = normalizeGeneratedWord(parsed?.word, previousWord);
+    const word = normalizeGeneratedWord(parsed?.word, usedWordSet);
     if (!word) {
       return null;
     }
@@ -393,21 +472,34 @@ Generate a private Wordle puzzle for a Discord channel.
   }
 }
 
-function pickWord(previousWord?: string): string {
-  let word = WORDLE_ANSWERS[crypto.randomInt(WORDLE_ANSWERS.length)];
-  while (word === previousWord) {
-    word = WORDLE_ANSWERS[crypto.randomInt(WORDLE_ANSWERS.length)];
+function pickWord(usedWords: ReadonlySet<string>, previousWord?: string): string {
+  const unusedWords = WORDLE_ANSWERS.filter((word) => !usedWords.has(word));
+  if (unusedWords.length > 0) {
+    return unusedWords[crypto.randomInt(unusedWords.length)];
   }
-  return word;
+
+  logger.warn('Wordle answer pool exhausted; allowing answer reuse', {
+    usedWordCount: usedWords.size,
+  });
+  const fallbackWords = WORDLE_ANSWERS.filter((word) => word !== previousWord);
+  const pool = fallbackWords.length > 0 ? fallbackWords : WORDLE_ANSWERS;
+  return pool[crypto.randomInt(pool.length)];
 }
 
 async function createChallenge(
   localDate: string,
+  usedWords: readonly string[],
   previousWord: string | undefined,
   trigger: WordleTrigger,
 ): Promise<WordleChallenge> {
-  const generated = await generateChallengeWithLlm(localDate, previousWord, trigger);
-  const word = generated?.word ?? pickWord(previousWord);
+  const usedWordSet = new Set(usedWords);
+  if (previousWord) {
+    usedWordSet.add(previousWord);
+  }
+
+  const wordsToAvoid = [...usedWordSet];
+  const generated = await generateChallengeWithLlm(localDate, wordsToAvoid, trigger);
+  const word = generated?.word ?? pickWord(usedWordSet, previousWord);
   return {
     localDate,
     word,
@@ -557,8 +649,10 @@ async function startWordleChallenge(
     return null;
   }
 
-  const challenge = await createChallenge(now.dateKey, existing?.word, options.trigger);
+  const usedWords = usedWordsForChannel(state, channelId);
+  const challenge = await createChallenge(now.dateKey, usedWords, existing?.word, options.trigger);
   state.channels[channelId] = challenge;
+  addUsedWord(state, channelId, challenge);
   await writeState(state);
 
   if (announceChannel && typeof announceChannel.send === 'function') {
@@ -573,6 +667,7 @@ async function startWordleChallenge(
     localDate: challenge.localDate,
     trigger: options.trigger,
     requestedBy: options.requestedBy,
+    usedWordCount: state.usedWords[channelId]?.length ?? 0,
   });
 
   return challenge;
