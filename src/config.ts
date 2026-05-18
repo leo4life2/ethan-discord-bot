@@ -89,6 +89,7 @@ export const ETHAN_RESEARCH_ALLOWED_DOMAINS = Object.freeze(parseCsv(process.env
 
 export const ETHAN_SUPPORT_TICKET_TOOL_ENABLED = parseBoolean(process.env.ETHAN_SUPPORT_TICKET_TOOL_ENABLED, true);
 export const ETHAN_SUPPORT_FORUM_CHANNEL_ID = process.env.ETHAN_SUPPORT_FORUM_CHANNEL_ID || '1288172857439813712';
+export const ETHAN_SUPPORT_FORUM_DEFAULT_TAG_IDS = Object.freeze(parseCsv(process.env.ETHAN_SUPPORT_FORUM_DEFAULT_TAG_IDS));
 
 const PROD_ETHAN_CHANNEL_IDS = [
   "1266202723448000650", // production ask ethan 1

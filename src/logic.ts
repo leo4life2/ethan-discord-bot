@@ -27,6 +27,7 @@ import {
   ETHAN_RESEARCH_SEARCH_CONTEXT_SIZE,
   ETHAN_RESEARCH_TOOL_CHOICE,
   ETHAN_RESEARCH_VERBOSITY,
+  ETHAN_SUPPORT_FORUM_DEFAULT_TAG_IDS,
   ETHAN_SUPPORT_FORUM_CHANNEL_ID,
   ETHAN_SUPPORT_TICKET_TOOL_ENABLED,
 } from './config.js';
@@ -352,6 +353,30 @@ function buildSupportTicketBody(input: SupportTicketInput, messageMeta: Message,
   return truncateText(lines.join('\n'), SUPPORT_TICKET_BODY_MAX_LENGTH);
 }
 
+function getSupportForumTagIds(supportChannel: any): string[] | undefined {
+  if (ETHAN_SUPPORT_FORUM_DEFAULT_TAG_IDS.length > 0) {
+    return [...ETHAN_SUPPORT_FORUM_DEFAULT_TAG_IDS];
+  }
+
+  const availableTags = Array.isArray(supportChannel?.availableTags)
+    ? supportChannel.availableTags
+    : Array.from(supportChannel?.availableTags?.values?.() ?? []);
+  if (availableTags.length === 0) return undefined;
+
+  const preferredTag = availableTags.find((tag: any) =>
+    !tag?.moderated && typeof tag?.name === 'string' && tag.name.toLowerCase() === 'english'
+  );
+  if (preferredTag?.id) return [preferredTag.id];
+
+  const unmoderatedTag = availableTags.find((tag: any) =>
+    !tag?.moderated && !['resolved!', 'resolved', 'user mistake', 'русский'].includes(String(tag?.name ?? '').toLowerCase())
+  );
+  if (unmoderatedTag?.id) return [unmoderatedTag.id];
+
+  const fallbackTag = availableTags.find((tag: any) => tag?.id);
+  return fallbackTag?.id ? [fallbackTag.id] : undefined;
+}
+
 function createSupportTicketTool(messageMeta: Message, history: Message[]) {
   return tool({
     name: 'create_support_ticket',
@@ -400,9 +425,11 @@ function createSupportTicketTool(messageMeta: Message, history: Message[]) {
 
       const title = sanitizeSupportTicketTitle(input.title);
       const content = buildSupportTicketBody(input, messageMeta, history);
+      const appliedTags = getSupportForumTagIds(supportChannel);
       const thread = await (supportChannel as any).threads.create({
         name: title,
         autoArchiveDuration: SUPPORT_TICKET_AUTO_ARCHIVE_DURATION_MINUTES,
+        ...(appliedTags ? { appliedTags } : {}),
         message: {
           content,
           allowedMentions: SAFE_ALLOWED_MENTIONS,
@@ -424,6 +451,7 @@ function createSupportTicketTool(messageMeta: Message, history: Message[]) {
         title,
         severity: input.severity,
         supportForumChannelId: ETHAN_SUPPORT_FORUM_CHANNEL_ID,
+        appliedTags,
         sourceMessageId: messageMeta.id,
         sourceChannelId: messageMeta.channelId,
       });
