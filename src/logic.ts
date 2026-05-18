@@ -1,8 +1,8 @@
-import type { Message } from "discord.js";
+import { ChannelType, type Message } from "discord.js";
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { Agent, run, webSearchTool } from '@openai/agents';
-import type { AgentInputItem, RunStreamEvent } from '@openai/agents';
+import { Agent, run, tool, webSearchTool } from '@openai/agents';
+import type { AgentInputItem, RunStreamEvent, Tool } from '@openai/agents';
 import { z } from 'zod';
 import { loadPrompt } from './promptStore.js';
 import { loadKnowledge } from './knowledgeStore.js';
@@ -27,6 +27,8 @@ import {
   ETHAN_RESEARCH_SEARCH_CONTEXT_SIZE,
   ETHAN_RESEARCH_TOOL_CHOICE,
   ETHAN_RESEARCH_VERBOSITY,
+  ETHAN_SUPPORT_FORUM_CHANNEL_ID,
+  ETHAN_SUPPORT_TICKET_TOOL_ENABLED,
 } from './config.js';
 
 let lastTtsTimestamp = 0;
@@ -34,6 +36,11 @@ const MAX_REACTIONS_PER_MESSAGE = 5;
 const MAX_REACTION_USERS_PER_EMOJI = 6;
 const MIN_RESEARCH_PROGRESS_DOTS = 3;
 const MAX_RESEARCH_PROGRESS_DOTS = 160;
+const SUPPORT_TICKET_TITLE_MAX_LENGTH = 90;
+const SUPPORT_TICKET_BODY_MAX_LENGTH = 1900;
+const SUPPORT_TICKET_CONTEXT_MAX_MESSAGES = 6;
+const SUPPORT_TICKET_AUTO_ARCHIVE_DURATION_MINUTES = 10080;
+const SUPPORT_TICKET_CACHE_MAX_ENTRIES = 200;
 
 const EthanResponseSchema = z.object({
   should_send_text_message: z.boolean().describe('Whether Ethan should send a text message to the channel.'),
@@ -56,9 +63,37 @@ const ResearchBriefSchema = z.object({
   caveats: z.string().describe('Any uncertainty, source weakness, or missing information. Empty string if none.'),
 });
 
+const SupportTicketInputSchema = z.object({
+  title: z.string().min(1).max(SUPPORT_TICKET_TITLE_MAX_LENGTH).describe('Short developer-readable title for the support forum post.'),
+  severity: z.enum(['low', 'medium', 'high', 'urgent']).describe('How severe the MinePal issue appears from the conversation.'),
+  user_impact: z.string().max(600).describe('What the user is blocked by or experiencing. Empty string if unknown.'),
+  summary: z.string().min(1).max(1200).describe('Concise factual summary of the MinePal problem developers should know about.'),
+  evidence: z.array(z.string().min(1).max(400)).max(8).describe('Specific observations from the conversation. Do not include speculation.'),
+  requested_action: z.string().max(600).describe('What developers should investigate or do next. Empty string if unclear.'),
+});
+
 type EthanResponse = z.infer<typeof EthanResponseSchema>;
 type ResearchBrief = z.infer<typeof ResearchBriefSchema>;
+type SupportTicketInput = z.infer<typeof SupportTicketInputSchema>;
 type ProgressSource = 'reply' | 'research';
+
+const supportTicketsBySourceMessageId = new Map<string, {
+  threadId: string;
+  url: string;
+  title: string;
+}>();
+
+function rememberSupportTicket(sourceMessageId: string, ticket: {
+  threadId: string;
+  url: string;
+  title: string;
+}): void {
+  if (supportTicketsBySourceMessageId.size >= SUPPORT_TICKET_CACHE_MAX_ENTRIES) {
+    const oldestKey = supportTicketsBySourceMessageId.keys().next().value;
+    if (oldestKey) supportTicketsBySourceMessageId.delete(oldestKey);
+  }
+  supportTicketsBySourceMessageId.set(sourceMessageId, ticket);
+}
 
 const SYSTEM_PROMPT_APPENDIX = [
   '[System Prompt Appendix]',
@@ -74,6 +109,10 @@ const SYSTEM_PROMPT_APPENDIX = [
   'Use research_web before replying when the question depends on current outside facts, credible sources, technical details you are unsure about, or a difficult support/research question.',
   'Do not call research_web for casual chat, obvious conversation, or MinePal facts already present in this prompt.',
   'When you use research_web, fold the result into Ethan voice and include concise source URLs when they matter.',
+  'You also have a create_support_ticket tool that creates a real post in the MinePal support forum for developers.',
+  'Use create_support_ticket only when the current conversation clearly describes a MinePal bug, outage, account/payment issue, moderation/support issue, or other problem a developer should know about.',
+  'Do not create support tickets for casual chat, ordinary questions, jokes, vague dissatisfaction, feature brainstorming, or issues that need one clarifying question first.',
+  'If you create a support ticket, keep replying normally afterward and mention the ticket only briefly if it helps the user.',
 ].join('\n');
 
 function generateKnowledgeSection(entries: { text: string; added_at: string }[]): string {
@@ -223,6 +262,182 @@ function formatResearchBrief(brief: ResearchBrief | undefined): string {
   ].join('\n');
 }
 
+function truncateText(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+}
+
+function sanitizeSupportTicketText(text: string): string {
+  return sanitizeDiscordMentions(text)
+    .replace(/<@!?\d+>/g, 'user')
+    .replace(/<@&\d+>/g, 'role')
+    .replace(/<#\d+>/g, 'channel');
+}
+
+function sanitizeSupportTicketTitle(title: string): string {
+  const sanitized = sanitizeSupportTicketText(title)
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return truncateText(sanitized || 'MinePal support issue', SUPPORT_TICKET_TITLE_MAX_LENGTH);
+}
+
+function supportTicketMessageUrl(message: Message): string {
+  try {
+    return message.url;
+  } catch {
+    return '';
+  }
+}
+
+function formatSupportContextLine(message: Message): string {
+  let content = message.content?.trim() || '';
+  if (!content && message.attachments.size > 0) {
+    content = `[${message.attachments.size} attachment${message.attachments.size === 1 ? '' : 's'}]`;
+  }
+  if (!content && message.embeds.length > 0) {
+    const embed = message.embeds[0];
+    content = embed.description?.trim() || embed.title?.trim() || '[embed]';
+  }
+
+  const safeContent = truncateText(sanitizeSupportTicketText(content || '[no text]'), 260);
+  return `- ${message.author.username}: ${safeContent}`;
+}
+
+function buildSupportTicketBody(input: SupportTicketInput, messageMeta: Message, history: Message[]): string {
+  const sourceUrl = supportTicketMessageUrl(messageMeta);
+  const channelLabel = messageMeta.guildId
+    ? `<#${messageMeta.channelId}>`
+    : `DM with ${messageMeta.author.username}`;
+
+  const contextMessages = history
+    .filter((message) => message.channelId === messageMeta.channelId)
+    .slice(-SUPPORT_TICKET_CONTEXT_MAX_MESSAGES);
+
+  if (!contextMessages.some((message) => message.id === messageMeta.id)) {
+    contextMessages.push(messageMeta);
+  }
+
+  const evidenceLines = input.evidence.length > 0
+    ? input.evidence.map((item) => `- ${truncateText(sanitizeSupportTicketText(item), 350)}`)
+    : ['- No specific evidence provided.'];
+
+  const contextLines = contextMessages.length > 0
+    ? contextMessages.map(formatSupportContextLine)
+    : ['- No recent context available.'];
+
+  const lines = [
+    '**Created by Ethan**',
+    `**Severity:** ${input.severity}`,
+    `**Reported by:** ${messageMeta.author.username} (${messageMeta.author.id})`,
+    `**Source:** ${sourceUrl || 'unavailable'}`,
+    `**Channel:** ${channelLabel}`,
+    '',
+    '**User impact**',
+    truncateText(sanitizeSupportTicketText(input.user_impact.trim() || 'Unknown.'), 550),
+    '',
+    '**Summary**',
+    truncateText(sanitizeSupportTicketText(input.summary.trim()), 900),
+    '',
+    '**Evidence**',
+    ...evidenceLines,
+    '',
+    '**Requested action**',
+    truncateText(sanitizeSupportTicketText(input.requested_action.trim() || 'Investigate the issue above.'), 550),
+    '',
+    '**Recent context**',
+    ...contextLines,
+  ];
+
+  return truncateText(lines.join('\n'), SUPPORT_TICKET_BODY_MAX_LENGTH);
+}
+
+function createSupportTicketTool(messageMeta: Message, history: Message[]) {
+  return tool({
+    name: 'create_support_ticket',
+    description: [
+      'Create a real post in the MinePal support forum for developers to investigate.',
+      'Use only when the current Discord conversation clearly reports a MinePal bug, outage, account/payment problem, moderation/support problem, or another concrete issue developers should know about.',
+      'Do not use for casual conversation, ordinary how-to questions, vague frustration, feature brainstorming, or cases where you still need one clarifying question.',
+      'Keep the ticket factual. Do not include hidden reasoning, unsupported guesses, private chain of thought, or raw Discord mentions.',
+    ].join(' '),
+    parameters: SupportTicketInputSchema,
+    strict: true,
+    timeoutMs: 12000,
+    timeoutBehavior: 'error_as_result',
+    errorFunction: (_context, error) => {
+      logger.error('Support ticket tool failed', {
+        error,
+        messageId: messageMeta.id,
+        channelId: messageMeta.channelId,
+      });
+      return 'support_ticket_created: false\nerror: Ethan could not create the support ticket because the Discord tool failed.';
+    },
+    execute: async (input) => {
+      const existing = supportTicketsBySourceMessageId.get(messageMeta.id);
+      if (existing) {
+        return [
+          'support_ticket_created: false',
+          'duplicate_for_source_message: true',
+          `thread_id: ${existing.threadId}`,
+          `url: ${existing.url}`,
+          `title: ${existing.title}`,
+        ].join('\n');
+      }
+
+      const supportChannel = await messageMeta.client.channels.fetch(ETHAN_SUPPORT_FORUM_CHANNEL_ID);
+      if (!supportChannel || supportChannel.type !== ChannelType.GuildForum) {
+        logger.error('Support forum channel is unavailable or not a forum channel', {
+          supportForumChannelId: ETHAN_SUPPORT_FORUM_CHANNEL_ID,
+          actualType: supportChannel?.type,
+          messageId: messageMeta.id,
+        });
+        return [
+          'support_ticket_created: false',
+          `error: support forum channel ${ETHAN_SUPPORT_FORUM_CHANNEL_ID} is unavailable or is not a forum channel`,
+        ].join('\n');
+      }
+
+      const title = sanitizeSupportTicketTitle(input.title);
+      const content = buildSupportTicketBody(input, messageMeta, history);
+      const thread = await (supportChannel as any).threads.create({
+        name: title,
+        autoArchiveDuration: SUPPORT_TICKET_AUTO_ARCHIVE_DURATION_MINUTES,
+        message: {
+          content,
+          allowedMentions: SAFE_ALLOWED_MENTIONS,
+        },
+        reason: `Ethan support ticket from message ${messageMeta.id}`,
+      });
+      const starterMessage = await thread.fetchStarterMessage().catch(() => null);
+      const url = starterMessage?.url ?? `https://discord.com/channels/${thread.guildId}/${thread.id}`;
+
+      rememberSupportTicket(messageMeta.id, {
+        threadId: thread.id,
+        url,
+        title,
+      });
+
+      logger.info('Created support ticket', {
+        threadId: thread.id,
+        url,
+        title,
+        severity: input.severity,
+        supportForumChannelId: ETHAN_SUPPORT_FORUM_CHANNEL_ID,
+        sourceMessageId: messageMeta.id,
+        sourceChannelId: messageMeta.channelId,
+      });
+
+      return [
+        'support_ticket_created: true',
+        `thread_id: ${thread.id}`,
+        `url: ${url}`,
+        `title: ${title}`,
+      ].join('\n');
+    },
+  });
+}
+
 function getRawModelEventData(event: RunStreamEvent): any | null {
   if (event.type !== 'raw_model_stream_event') return null;
   const data = event.data as any;
@@ -249,6 +464,8 @@ function isResearchActivityEvent(event: RunStreamEvent): boolean {
 function createEthanAgent(
   systemPrompt: string,
   onResearchStream: (event: RunStreamEvent, source: ProgressSource) => void | Promise<void>,
+  messageMeta: Message,
+  history: Message[],
 ) {
   const webSearchOptions = {
     userLocation: { type: 'approximate', country: 'US' },
@@ -289,6 +506,27 @@ function createEthanAgent(
     outputType: ResearchBriefSchema,
   });
 
+  const tools: Tool[] = [
+    researchAgent.asTool({
+      toolName: 'research_web',
+      toolDescription: [
+        'Research a current, source-backed, technical, or uncertain question before Ethan replies.',
+        'Input should include the exact question, relevant Discord context, and what kind of source or freshness matters.',
+      ].join(' '),
+      runOptions: {
+        maxTurns: ETHAN_RESEARCH_MAX_TURNS,
+      },
+      onStream: async ({ event }) => {
+        await onResearchStream(event, 'research');
+      },
+      customOutputExtractor: (result) => formatResearchBrief(result.finalOutput as ResearchBrief | undefined),
+    }),
+  ];
+
+  if (ETHAN_SUPPORT_TICKET_TOOL_ENABLED) {
+    tools.push(createSupportTicketTool(messageMeta, history));
+  }
+
   return new Agent({
     name: 'Ethan reply brain',
     instructions: systemPrompt,
@@ -305,22 +543,7 @@ function createEthanAgent(
       parallelToolCalls: false,
       store: true,
     },
-    tools: [
-      researchAgent.asTool({
-        toolName: 'research_web',
-        toolDescription: [
-          'Research a current, source-backed, technical, or uncertain question before Ethan replies.',
-          'Input should include the exact question, relevant Discord context, and what kind of source or freshness matters.',
-        ].join(' '),
-        runOptions: {
-          maxTurns: ETHAN_RESEARCH_MAX_TURNS,
-        },
-        onStream: async ({ event }) => {
-          await onResearchStream(event, 'research');
-        },
-        customOutputExtractor: (result) => formatResearchBrief(result.finalOutput as ResearchBrief | undefined),
-      }),
-    ],
+    tools,
     outputType: EthanResponseSchema,
   });
 }
@@ -584,7 +807,7 @@ export async function handle(
       }
     };
 
-    const ethanAgent = createEthanAgent(systemPrompt, handleProgressEvent);
+    const ethanAgent = createEthanAgent(systemPrompt, handleProgressEvent, messageMeta, history);
 
     logger.debug('LLM input', {
       input: inputItems,

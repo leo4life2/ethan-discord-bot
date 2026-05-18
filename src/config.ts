@@ -87,6 +87,9 @@ export const ETHAN_RESEARCH_EXTERNAL_WEB_ACCESS = parseBoolean(process.env.ETHAN
 export const ETHAN_RESEARCH_PARALLEL_TOOL_CALLS = parseBoolean(process.env.ETHAN_RESEARCH_PARALLEL_TOOL_CALLS, false);
 export const ETHAN_RESEARCH_ALLOWED_DOMAINS = Object.freeze(parseCsv(process.env.ETHAN_RESEARCH_ALLOWED_DOMAINS));
 
+export const ETHAN_SUPPORT_TICKET_TOOL_ENABLED = parseBoolean(process.env.ETHAN_SUPPORT_TICKET_TOOL_ENABLED, true);
+export const ETHAN_SUPPORT_FORUM_CHANNEL_ID = process.env.ETHAN_SUPPORT_FORUM_CHANNEL_ID || '1288172857439813712';
+
 const PROD_ETHAN_CHANNEL_IDS = [
   "1266202723448000650", // production ask ethan 1
   "1453363563950248038", // production ask ethan 2
