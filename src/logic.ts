@@ -107,7 +107,7 @@ const SYSTEM_PROMPT_APPENDIX = [
   'Use research_web before replying when the question depends on current outside facts, credible sources, technical details you are unsure about, or a difficult support/research question.',
   'Do not call research_web for casual chat, obvious conversation, or MinePal facts already present in this prompt.',
   'When you use research_web, fold the result into Ethan voice and include concise source URLs when they matter.',
-  'You also have a create_support_ticket tool that creates a real post in the MinePal support forum for developers.',
+  'When available, you have a create_support_ticket tool that creates a real post in the MinePal support forum for developers.',
   'Use create_support_ticket only when the current conversation clearly describes a MinePal bug, outage, account/payment issue, moderation/support issue, or other problem a developer should know about.',
   'Do not create support tickets for casual chat, ordinary questions, jokes, vague dissatisfaction, feature brainstorming, or issues that need one clarifying question first.',
   'If you create a support ticket, keep replying normally afterward and mention the ticket only briefly if it helps the user.',
@@ -325,6 +325,17 @@ function supportTicketMessageUrl(message: Message): string {
   } catch {
     return '';
   }
+}
+
+function isInSupportForumContext(message: Message): boolean {
+  if (message.channelId === ETHAN_SUPPORT_FORUM_CHANNEL_ID) return true;
+
+  const channel = message.channel as any;
+  const parentId = channel?.isThread?.()
+    ? channel.parentId
+    : channel?.parentId ?? channel?.parent?.id;
+
+  return parentId === ETHAN_SUPPORT_FORUM_CHANNEL_ID;
 }
 
 function formatSupportContextLine(message: Message): string {
@@ -550,6 +561,16 @@ function createEthanAgent(
   history: Message[],
   onSupportTicketResult: (ticket: SupportTicketResult) => void,
 ) {
+  const isSupportForumContext = isInSupportForumContext(messageMeta);
+  const instructions = isSupportForumContext
+    ? [
+      systemPrompt,
+      '[Support Forum Context]',
+      'You are already talking inside the MinePal support forum or one of its ticket threads.',
+      'Do not create another support ticket from here. Answer in the current thread instead.',
+    ].join('\n\n')
+    : systemPrompt;
+
   const webSearchOptions = {
     userLocation: { type: 'approximate', country: 'US' },
     searchContextSize: ETHAN_RESEARCH_SEARCH_CONTEXT_SIZE,
@@ -606,13 +627,13 @@ function createEthanAgent(
     }),
   ];
 
-  if (ETHAN_SUPPORT_TICKET_TOOL_ENABLED) {
+  if (ETHAN_SUPPORT_TICKET_TOOL_ENABLED && !isSupportForumContext) {
     tools.push(createSupportTicketTool(messageMeta, history, onSupportTicketResult));
   }
 
   return new Agent({
     name: 'Ethan reply brain',
-    instructions: systemPrompt,
+    instructions,
     model: ETHAN_REPLY_MODEL,
     modelSettings: {
       reasoning: {
